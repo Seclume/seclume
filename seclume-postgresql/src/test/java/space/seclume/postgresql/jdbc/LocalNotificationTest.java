@@ -53,7 +53,7 @@ class LocalNotificationTest {
             Assumptions.abort("no PostgreSQL on " + TestHosts.postgres());
         }
         url = "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":"
-                + TestHosts.postgresPort() + "/seclume_test?user=seclume_test&provider=file&path="
+                + TestHosts.postgresPort() + "/seclume_test?tls=prefer&user=seclume_test&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

@@ -206,9 +206,17 @@ What a pod gets with `redact-dumps`:
   its owner only. Its root file system is read-only, it holds no capabilities, and its memory is
   limited (`--sidecar-memory`, 256Mi). `--native-sidecar` makes it an init container with
   `restartPolicy: Always` (Kubernetes 1.29+), so it does not keep a Job's pod from completing.
+- **Set `--dump-size-limit`.** The dump folder is an `emptyDir` on the node's disk, and without
+  a `sizeLimit` - the default - a dump as large as the heap, or several in a row, fills the
+  node's ephemeral storage for every pod on it. A little more than the largest heap
+  (`-Xmx`) of the annotated pods is enough: a dump is about the size of the heap in use.
 
 With `spiffe`, the SPIFFE CSI driver's volume (`--spiffe-csi-driver`, `csi.spiffe.io`) is mounted
-read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead.
+read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead - only
+into pods of the namespaces `--spiffe-namespaces` names, and the webhook does not start with the
+one and without the other: a host directory added to any pod that asks would also reach
+namespaces where Pod Security does not forbid `hostPath`. Pods elsewhere get a warning and no
+volume.
 `SPIFFE_ENDPOINT_SOCKET` names the socket, which `spiffe=` bundles read when they are given no
 `socket=`.
 
@@ -249,6 +257,14 @@ application container's process namespace, and seclume-heapcheck runs in it with
   lines go to stderr, and the exit code is the check's.
 - **Same reports as before.** Secrets are named by their paths as given, so reports compare
   across runs with `compare.py` as before.
+- **A hostile application cannot lead it out.** The check usually runs as root, and through
+  `/proc/<pid>/root` the kernel follows an absolute link from the *host's* root. So every file
+  of the application - dump, secrets - is opened by the kernel inside the application's root
+  in one step (`openat2` with `RESOLVE_IN_ROOT`, `RESOLVE_NO_MAGICLINKS`), then read by its
+  descriptor. Deletion goes through the directory opened the same way, so a link is removed,
+  never followed. A FIFO or device in place of the dump is refused. Needs Linux 5.6 or later;
+  without `openat2` nothing is read. `seclume-heapcheck/proof/run-rooted.sh` plants such links
+  in a container: the plain path reads the host's file, the check reads the container's.
 
 **A dump that has to leave the pod.** For a memory leak or a vendor's support case, `redact`
 makes the dump the same way and redacts it inside the pod with `--redact`. Only the redacted
@@ -298,7 +314,8 @@ A heap dump is needed - for a memory leak, for a vendor's support ticket - and i
 every credential the process held. `--redact` writes a copy with each of them overwritten:
 
 - **What goes:** every occurrence of each named secret, in every encoding it can lie in
-  (UTF-8, UTF-16 in both byte orders, Base64; a binary secret as its bytes and as Base64),
+  (UTF-8, UTF-16 in both byte orders, Base64, percent-encoded as `URLEncoder` and as RFC 3986
+  strictly write it, hex digits in either case; a binary secret as its bytes and as Base64),
   and with `--discover` the value of every credential of a known shape - the password of a
   URL rather than the URL, all of a PEM block.
 - **Echoes too:** what discovery found is then looked for where it has no shape - the URL's
@@ -316,8 +333,23 @@ every credential the process held. `--redact` writes a copy with each of them ov
 
 Exit 0 means the copy is written and checked, whatever the original held - the reports, if
 asked for, still describe the original. What it does not reach: a credential named by nobody
-and of no known shape, one split across objects, compressed or encrypted. The check proves
-that what was looked for is gone, not that nothing else is there; name what you know.
+and of no known shape, one split across objects, compressed or encrypted. Nor these forms of a
+named one:
+
+- **Partly percent-encoded.** A URI builder that encodes only what its component forbids -
+  Spring's `UriComponentsBuilder`, `java.net.URI`'s multi-argument constructors - leaves `!`,
+  `*` or `@` as they are where the strict form encodes them. Every subset of a password's
+  characters is a form of its own, so they cannot all be looked for.
+- **XML and HTML character references, JSON's `\uXXXX`.** A secret that went through an XML or
+  JSON writer can be in a dump in that form. Each character can be written several ways
+  (`&#64;`, `&#x40;`, `&commat;`), so the forms multiply with the length.
+- **Encoded twice.** `%2540` for `@`, a Base64 of a Base64, a percent-encoded Base64. Every
+  combination would be a search of its own over the whole dump.
+
+Each search is a full pass over a dump of gigabytes, and the forms above multiply instead of
+adding up. The log masker reads these forms (see below): a line is short, a dump is not. The
+check proves that what was looked for is gone, not that nothing else is there; name what you
+know.
 
 The redaction itself is in `seclume-heapdump`, a library without dependencies
 (`space.seclume.heapdump.Redactor`), together with the discovery and the object attribution.
@@ -367,15 +399,36 @@ A password that reaches a log line is on the heap already; what is left to stop 
 reaching a file, a collector, a support ticket. `seclume-logging` looks for the application's
 own secrets in every message and stack trace and writes `[redacted:<label>]` instead:
 
+**Logback** - include the rules after Spring Boot's own, which register `%wex` and `%wEx`
+for themselves; the rule included last is the one used, by the appenders above it as well.
+Included before them, Logback's status warns that the stack traces are not masked:
+
 ```xml
 <!-- logback-spring.xml -->
-<conversionRule conversionWord="msg"
-                class="space.seclume.logging.logback.RedactingMessageConverter"/>
-<conversionRule conversionWord="xEx"
-                class="space.seclume.logging.logback.RedactingThrowableConverter"/>
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/base.xml"/>
+  <include resource="space/seclume/logging/logback/redact-rules.xml"/>
+</configuration>
 ```
 
-(`class` is the attribute's name since Logback 1.5; older versions call it `converterClass`.)
+`redact-rules.xml` masks every word a message (`%m`, `%msg`, `%message`) or a stack trace
+(`%ex`, `%exception`, `%throwable`, `%xEx` and its long forms, `%rEx`, `%rootException`,
+Spring Boot's `%wex` and `%wEx`) is written with; it needs Logback 1.5 or later. A rule
+replaces the converter of its one word: a rule for `%msg` alone leaves Spring Boot's `%m` as
+it was. What no rule reaches - the stack trace Logback adds to a pattern that has no stack
+trace word, the MDC (`%X`), key-value pairs, a JSON or other structured encoder - is masked
+by `RedactingEncoder`, which masks the whole line; one with neither a pattern nor an
+encoder, or both, reports an error and writes nothing:
+
+```xml
+<encoder class="space.seclume.logging.logback.RedactingEncoder">
+  <pattern>%d %-5level %logger - %msg%n</pattern>
+</encoder>
+
+<encoder class="space.seclume.logging.logback.RedactingEncoder">
+  <encoder class="ch.qos.logback.classic.encoder.JsonEncoder"/>
+</encoder>
+```
 
 **Log4j 2** - `%redact{...}` masks what the pattern in its braces writes. Put the message and
 the stack trace inside, and the layout writes the stack trace once, masked:
@@ -385,7 +438,40 @@ the stack trace inside, and the layout writes the stack trace once, masked:
 <PatternLayout pattern="%d %-5level %logger - %redact{%msg%n%throwable}"/>
 ```
 
-The plugin is in Log4j's own index in the jar; no `packages` attribute is needed.
+The plugin is in Log4j's own index in the jar; no `packages` attribute is needed. A
+`%redact{...}` with no stack trace word inside leaves the stack trace to the layout, which
+appends it after the converter, unmasked; Log4j's status log warns about it.
+
+**Spring Boot's structured logging** (`logging.structured.format.console=ecs` and the like)
+is written by the appenders of Spring Boot's own `base.xml`, whose encoders cannot be wrapped
+from outside. Give the format an appender of your own and wrap its encoder:
+
+```xml
+<!-- logback-spring.xml -->
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+  <include resource="space/seclume/logging/logback/redact-rules.xml"/>
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="space.seclume.logging.logback.RedactingEncoder">
+      <encoder class="org.springframework.boot.logging.logback.StructuredLogEncoder">
+        <format>ecs</format>
+      </encoder>
+    </encoder>
+  </appender>
+  <root level="INFO"><appender-ref ref="JSON"/></root>
+</configuration>
+```
+
+**Cut lines are masked as cut.** A pattern that shortens the message before the masker sees it
+- `%.20msg` inside Log4j 2's `%redact{...}`, a precision in the format of the formatter
+`RedactingFormatter` wraps - can cut a secret in two, and the masker only recognises a secret
+whole: the part that is left is written. Cut after masking (`%.20redact{%msg}`) or not at all.
+Logback's `%.20msg` is cut after the rule's converter has masked it, and is safe.
+
+**Is anything masked?** With `seclume.logging.redact=true`, the starter checks at start that
+Logback runs one of seclume's converters or a `RedactingEncoder`, and warns when it does not -
+the switch alone installs the masker and masks no line. `seclume.logging.redact.strict=true`
+refuses to start instead.
 
 **java.util.logging**, and `System.Logger`, which writes there unless something else is
 installed - `RedactingFormatter` masks what another formatter makes of a record:
@@ -419,11 +505,23 @@ its tag.
   in the message or in an exception's message and stack trace: its Base64, standard or
   URL-safe, padded or not, and inside a longer Base64 text - `Authorization: Basic
   base64(user:password)` whatever the user, the one or two characters the password shares with
-  its neighbours left; percent-encoded, as in a JDBC URL or a form; JSON-escaped. Secrets
+  its neighbours left; percent-encoded, as in a JDBC URL or a form; JSON-escaped; with XML's
+  and HTML's character references, as an XML formatter or layout writes it. Secrets
   shorter than six characters are not looked for: they would mask ordinary words.
+- **What it costs:** a line is scanned once as it stands, and once more decoded for each
+  encoding it shows a sign of - a `%` or `+`, a backslash, an `&`. Each reading is linear in
+  the line, and none is free: warmed up, a line of 200,000 `&` takes about 3.6 ms where one of
+  200,000 letters takes 2.4. No line is too long to be masked - a length past which a line went
+  out unread would let a secret through just there - so a logger that writes a whole document
+  per message pays for it on every line.
 - **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
   the same the heap dump redaction looks for. Read again once every bean is made, and then every
-  `seclume.logging.refresh-interval`.
+  `seclume.logging.refresh-interval` - every 5 seconds instead while one of them could not be
+  read, so a vault that was not reachable at start is not missing from the masks for minutes.
+- **After a CRaC restore:** the masker's key and fingerprints were wiped before the checkpoint.
+  The secrets are read again on a thread of their own, not on the thread that logs. A line waits
+  up to 2 seconds for that; one that cannot be checked by then is written as
+  `[seclume: line withheld - ...]` instead of unmasked.
 - **Other loggers:** `SecretMasker.maskInstalled(text)` is the whole of it - a Log4j2 rewrite
   policy or a JUL formatter can call it; `new SecretMasker(providers)` works without Spring.
 

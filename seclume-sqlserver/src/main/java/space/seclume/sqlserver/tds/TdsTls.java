@@ -37,6 +37,8 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
     private final SSLEngine engine;
     /** Whether a tlsPin is the trust here - compared once the handshake shows the key. */
     private boolean pinned;
+    /** The chain and host name were checked; with {@link #pinned}, the key is compared instead. */
+    private boolean chainChecked;
     /** Not final only so that {@link #replaceTransport} can do its job. */
     private space.seclume.internal.Transport channel;
 
@@ -108,6 +110,7 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
             engine.setEnabledProtocols(new String[] {"TLSv1.2"});
             TdsTls tls = new TdsTls(engine, channel);
             tls.pinned = pinned;
+            tls.chainChecked = !trustAnyCertificate && !pinned;
             return tls;
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new IOException("cannot set up TLS", e);
@@ -328,6 +331,12 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
      * second, because TLS 1.3 cannot be nested this way at all. That is what
      * TDS 8.0 exists for.
      */
+    @Override
+    public Boolean serverAuthenticated() {
+        // A pin is compared at the end of the handshake, and a wrong key ends it.
+        return handshakeDone && (pinned || chainChecked);
+    }
+
     @Override
     public String description() {
         return protocol() + " / " + cipherSuite();

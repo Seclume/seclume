@@ -83,7 +83,25 @@ public final class ClientHandshake {
     public static TlsConnection connect(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn,
             ClientHello.Offer offer) throws IOException {
+        requireTrust(trust);
         return handshake(transport, host, trust, identity, alpn, offer);
+    }
+
+    /**
+     * The same without checking the server: encryption, no authentication -
+     * said at the call site, as everywhere. A null trust in {@code connect}
+     * used to mean the same thing without a word.
+     */
+    public static TlsConnection connectWithoutAuthenticating(Transport transport, String host,
+            ClientIdentity identity, String alpn, ClientHello.Offer offer) throws IOException {
+        return handshake(transport, host, null, identity, alpn, offer);
+    }
+
+    private static void requireTrust(CertificateTrust trust) {
+        if (trust == null) {
+            throw new IllegalArgumentException("no trust: call connectWithoutAuthenticating if "
+                    + "that is really what is wanted, so that it is visible at the call site");
+        }
     }
 
     /**
@@ -158,13 +176,20 @@ public final class ClientHandshake {
      * caller - TDS 8.0, where {@code tds/8.0} is how SQL Server knows what
      * arrived on its port.
      *
-     * @param trust    the anchors, or null for encryption without authentication
+     * @param trust    the anchors; never null - see connectWithoutAuthenticating
      * @param identity a client certificate, or null
      * @param alpn     the protocol name to offer and to require back
      */
     public static TlsConnection connect(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn) throws IOException {
+        requireTrust(trust);
         return handshake(transport, host, trust, identity, alpn);
+    }
+
+    /** {@link #connect(Transport, String, CertificateTrust, ClientIdentity, String)} without checking the server. */
+    public static TlsConnection connectWithoutAuthenticating(Transport transport, String host,
+            ClientIdentity identity, String alpn) throws IOException {
+        return handshake(transport, host, null, identity, alpn);
     }
 
     private static TlsConnection handshake(Transport transport, String host,
@@ -177,7 +202,25 @@ public final class ClientHandshake {
         return handshake(transport, host, trust, identity, alpn, defaultOffer());
     }
 
+    /**
+     * Counted while an identity may sign: {@link ClientIdentities#closeAll()}
+     * waits for it rather than closing a key under a running handshake.
+     */
     private static TlsConnection handshake(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn,
+            ClientHello.Offer offer) throws IOException {
+        if (identity == null) {
+            return handshakeNow(transport, host, trust, null, alpn, offer);
+        }
+        ClientIdentities.handshakeStarted();
+        try {
+            return handshakeNow(transport, host, trust, identity, alpn, offer);
+        } finally {
+            ClientIdentities.handshakeEnded();
+        }
+    }
+
+    private static TlsConnection handshakeNow(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn,
             ClientHello.Offer offer) throws IOException {
         boolean offers13 = offer != ClientHello.Offer.TLS12;

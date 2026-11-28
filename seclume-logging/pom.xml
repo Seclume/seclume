@@ -15,8 +15,9 @@
   <description>
     Masks the application's own secrets in log output before it is written,
     without holding any of them: each secret is kept as a keyed fingerprint
-    and a keyed tag, the key in locked native memory. A Logback converter for
-    the message and the stack trace; any other logger calls SecretMasker.</description>
+    and a keyed tag, the key in locked native memory. Logback converters for
+    the message and the stack trace and an encoder for a whole line, Log4j 2's
+    %redact, a java.util.logging formatter; any other logger calls SecretMasker.</description>
 
   <properties>
     <logback.version>1.6.7</logback.version>

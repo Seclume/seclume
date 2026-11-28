@@ -79,6 +79,28 @@ public final class OracleSession implements AutoCloseable {
                            boolean legacyVerifier11g) {
 
         /**
+         * The same settings with TLS mode {@code mode} - for a caller that
+         * talks to a server it knows has no certificate to check, and says so.
+         */
+        public Settings withTls(TlsMode mode) {
+            return new Settings(host, port, service, user, secret, connectTimeoutMillis, hosts, resultLimit, mode, tlsStack, identity, nativeEncryption, legacyVerifier11g);
+        }
+
+        /**
+         * Host and service go into the (DESCRIPTION=...) as they are: a
+         * parenthesis or an equals sign in either would add entries of its own.
+         */
+        public Settings {
+            if (service != null && !service.matches("[A-Za-z0-9_.$#\\-]+")) {
+                throw new IllegalArgumentException("a service name is letters, digits and "
+                        + "_ . $ # - only, not '" + service + "'");
+            }
+            if (host != null && !host.matches("[A-Za-z0-9._\\-:\\[\\]]+")) {
+                throw new IllegalArgumentException("not a host name: '" + host + "'");
+            }
+        }
+
+        /**
          * Without the 11g verifier - the default: an account that has only
          * the 11g verifier is refused, and says how to allow it.
          */
@@ -133,15 +155,15 @@ public final class OracleSession implements AutoCloseable {
         public Settings(String host, int port, String service, String user,
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    ResultLimit.NONE, TlsMode.OFF);
+                    ResultLimit.NONE, TlsMode.VERIFY_FULL);
         }
 
-        /** With a result limit but without encryption - see the tls component. */
+        /** With a result limit and the default TLS mode, verify-full. */
         public Settings(String host, int port, String service, String user,
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts,
                         ResultLimit resultLimit) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    resultLimit, TlsMode.OFF);
+                    resultLimit, TlsMode.VERIFY_FULL);
         }
 
         public Settings(String host, int port, String service, String user,
@@ -420,6 +442,11 @@ public final class OracleSession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /**
      * Runs a statement that answers one row of one column, and hands back that
      * value as text.
@@ -634,6 +661,10 @@ public final class OracleSession implements AutoCloseable {
             opened = connectAndLogIn(settings);
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
+        } catch (SQLException e) {
+            // The login budget closed the connection: that is what happened,
+            // not the read or write the close broke.
+            throw space.seclume.internal.Transports.late(e);
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "oracle",
                     settings.host() + ":" + settings.port(), settings.service(),
@@ -999,8 +1030,28 @@ public final class OracleSession implements AutoCloseable {
      * framed the way the reference client's is, and the next person to pick
      * the question up will want it within reach rather than rewritten.
      */
-    private static final boolean TRACE_LOB =
-            Boolean.getBoolean("seclume.oracle.traceLob");
+    private static final boolean TRACE_LOB = traceLob();
+
+    /**
+     * The trace writes whole LOB packets - the application's data - as hex to
+     * System.err, past logging and its masking. One switch was too easy to
+     * leave on: it takes seclume.debug.unsafe=true as well, and says so.
+     */
+    private static boolean traceLob() {
+        if (!Boolean.getBoolean("seclume.oracle.traceLob")) {
+            return false;
+        }
+        if (!Boolean.getBoolean("seclume.debug.unsafe")) {
+            System.getLogger(OracleSession.class.getName()).log(System.Logger.Level.WARNING,
+                    "seclume: seclume.oracle.traceLob is ignored - it writes LOB contents to "
+                    + "System.err, and needs seclume.debug.unsafe=true as well");
+            return false;
+        }
+        System.getLogger(OracleSession.class.getName()).log(System.Logger.Level.WARNING,
+                "seclume: seclume.oracle.traceLob is on - LOB contents go to System.err "
+                + "unmasked. Never in production.");
+        return true;
+    }
 
     /**
      * The packet the server sends when it will not send the LOB itself.
@@ -1541,7 +1592,11 @@ public final class OracleSession implements AutoCloseable {
      * {@code LocalLogInAgainTest} checks one by one. About 8 ms instead of
      * 28 for a new connection, without TLS.
      *
-     * <p>An open transaction is rolled back first: a logoff commits it.
+     * <p>An open transaction is rolled back first: a logoff commits it. With
+     * autoCommit on nothing is rolled back, and nothing needs to be: the
+     * server commits a PL/SQL block's or a CALL's DML at once, a query cannot
+     * change data (ORA-14551), and what a SELECT ... FOR UPDATE leaves open
+     * holds locks only - {@code LocalLogInAgainTest} measures each.
      * Everything this side knew about the old session goes with it - parsed
      * cursors, the row window, the session's zone. On any failure the
      * connection is closed; it is not to be used again.

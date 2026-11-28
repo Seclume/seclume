@@ -145,6 +145,17 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
     @Override
     public int sign(String digest, boolean pss, MemorySegment message, long length,
                     MemorySegment signature) {
+        use.readLock().lock();
+        try {
+            return signOpen(digest, pss, message, length, signature);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    /** Under the read lock: the key cannot be freed while OpenSSL holds it. */
+    private int signOpen(String digest, boolean pss, MemorySegment message, long length,
+                         MemorySegment signature) {
         checkOpen();
         if (pss && !is("RSA") && !is("RSA-PSS")) {
             // OpenSSL takes the padding parameter for an EC key and signs anyway;
@@ -234,13 +245,21 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
 
     @Override
     public void close() {
-        MemorySegment old = key;
-        key = NULL;
-        if (!old.equals(NULL)) {
-            Native.invoke(Native.KEY_FREE, old);
-            LiveKeys.closed(this);
+        use.writeLock().lock();
+        try {
+            MemorySegment old = key;
+            key = NULL;
+            if (!old.equals(NULL)) {
+                Native.invoke(Native.KEY_FREE, old);
+                LiveKeys.closed(this);
+            }
+        } finally {
+            use.writeLock().unlock();
         }
     }
+
+    private final java.util.concurrent.locks.ReentrantReadWriteLock use =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
 
     private void checkOpen() {
         if (key.equals(NULL)) {

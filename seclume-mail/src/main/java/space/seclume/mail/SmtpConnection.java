@@ -76,6 +76,7 @@ public final class SmtpConnection implements AutoCloseable {
                 MailEvents.login("smtp", settings, connection::login);
                 connection.wire.unguard();
             }
+            connection.wire.loggedIn();
             return connection;
         } catch (IOException | RuntimeException e) {
             connection.abandon();
@@ -304,7 +305,7 @@ public final class SmtpConnection implements AutoCloseable {
     private static void expect(Reply reply, int code, String step) throws MailException {
         if (reply.code != code) {
             throw new MailException(reply.code, step + " was answered with " + reply.code + " "
-                    + reply.text());
+                    + space.seclume.internal.ServerText.printable(reply.text()));
         }
     }
 
@@ -317,7 +318,7 @@ public final class SmtpConnection implements AutoCloseable {
             if (line.length() < 3 || !isDigit(line.charAt(0)) || !isDigit(line.charAt(1))
                     || !isDigit(line.charAt(2))
                     || (line.length() > 3 && line.charAt(3) != ' ' && line.charAt(3) != '-')) {
-                throw new MailException(-1, "not an SMTP reply: " + line);
+                throw new MailException(-1, "not an SMTP reply: " + space.seclume.internal.ServerText.printable(line));
             }
             int code = (line.charAt(0) - '0') * 100 + (line.charAt(1) - '0') * 10
                     + (line.charAt(2) - '0');

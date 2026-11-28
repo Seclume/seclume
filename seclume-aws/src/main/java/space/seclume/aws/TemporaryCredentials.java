@@ -1,7 +1,6 @@
 package space.seclume.aws;
 
 import java.lang.foreign.MemorySegment;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -44,12 +43,9 @@ abstract class TemporaryCredentials {
     static final long RETRY_SECONDS = 5;
     private static final System.Logger LOG =
             System.getLogger(TemporaryCredentials.class.getName());
-    private static final SecureRandom RANDOM = new SecureRandom();
-    private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce for the placeholder - public
     private static final Map<String, Generation> BY_PLACEHOLDER = new ConcurrentHashMap<>();
 
     private final Deque<Generation> generations = new ArrayDeque<>();
-    private long next;
     /** The source is not asked again before this, whatever it answered. */
     private Instant askAgain = Instant.MIN;
 
@@ -88,6 +84,20 @@ abstract class TemporaryCredentials {
                    SecretScope token) {
     }
 
+    TemporaryCredentials() {
+        // Before a checkpoint (CRaC, SnapStart): the secret key and the token
+        // must not be in the image. The next request fetches a fresh set.
+        space.seclume.internal.Checkpoint.register(this, TemporaryCredentials::forget);
+    }
+
+    /** Wipes every generation; a request signed with one of them fails rather than leaks. */
+    private synchronized void forget() {
+        while (!generations.isEmpty()) {
+            generations.removeFirst().close();
+        }
+        askAgain = Instant.MIN;
+    }
+
     /** Fetches a fresh set; the caller owns the scopes. */
     abstract Fetched fetch();
 
@@ -124,8 +134,12 @@ abstract class TemporaryCredentials {
             return latest;
         }
         askAgain = now.plusSeconds(RETRY_SECONDS);
-        String placeholder = TOKEN_PREFIX + NONCE + "-" + (++next) + "-"
-                + System.identityHashCode(this);
+        // Random each generation: a process nonce, a count and an identity
+        // hash made the next generation's placeholder known from this one.
+        String placeholder;
+        do {
+            placeholder = TOKEN_PREFIX + HexFormat.of().formatHex(nonce()); // seclume-allow: random, public
+        } while (BY_PLACEHOLDER.containsKey(placeholder));
         latest = new Generation(fetched.accessKeyId(), placeholder, fetched.expires(),
                 fetched.secretKey(), fetched.token());
         BY_PLACEHOLDER.put(placeholder, latest);
@@ -161,8 +175,8 @@ abstract class TemporaryCredentials {
     }
 
     private static byte[] nonce() {
-        byte[] bytes = new byte[8];
-        RANDOM.nextBytes(bytes);
+        byte[] bytes = new byte[16];
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }

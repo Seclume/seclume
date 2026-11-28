@@ -127,30 +127,20 @@ public final class Redactor {
         public record Pattern(String encoding, byte[] bytes, Fill fill) {
         }
 
-        /** A secret that is text. */
+        /** A secret that is text - in every encoding {@link Encodings} names. */
         public static Needle text(String label, String secret) {
             if (secret.isEmpty()) {
                 throw new IllegalArgumentException("an empty secret matches everywhere");
             }
             // The searcher holds what it hunts for - in its own process, which
             // is why a Needle is built by a caller that is not the application.
-            byte[] utf8 = secret.getBytes(StandardCharsets.UTF_8); // seclume-allow: the searcher needs the pattern it hunts for
             List<Pattern> patterns = new ArrayList<>();
-            patterns.add(new Pattern("UTF-8", utf8, Fill.ASCII));
-            // seclume-allow: the searcher needs the pattern it hunts for
-            patterns.add(new Pattern("UTF-16BE", secret.getBytes(StandardCharsets.UTF_16BE),
-                    Fill.UTF16_BE));
-            // seclume-allow: the searcher needs the pattern it hunts for
-            patterns.add(new Pattern("UTF-16LE", secret.getBytes(StandardCharsets.UTF_16LE),
-                    Fill.UTF16_LE));
-            // seclume-allow: the searcher needs the pattern it hunts for
-            patterns.add(new Pattern("Base64", Base64.getEncoder().encode(utf8), Fill.ASCII));
-            if (secret.chars().allMatch(c -> c <= 0xff) && secret.chars().anyMatch(c -> c > 0x7f)) {
-                // A compact String's own bytes: "Grüße" is 47 72 FC DF 65 there.
-                // seclume-allow: the searcher needs the pattern it hunts for
-                patterns.add(new Pattern("ISO-8859-1", secret.getBytes(StandardCharsets.ISO_8859_1),
-                        Fill.ASCII));
-            }
+            Encodings.ofText(secret).forEach((encoding, bytes) ->
+                    patterns.add(new Pattern(encoding, bytes, switch (encoding) {
+                        case "UTF-16BE" -> Fill.UTF16_BE;
+                        case "UTF-16LE" -> Fill.UTF16_LE;
+                        default -> Fill.ASCII;
+                    })));
             return new Needle(label, List.copyOf(patterns));
         }
 
@@ -159,9 +149,11 @@ public final class Redactor {
             if (secret.length == 0) {
                 throw new IllegalArgumentException("an empty secret matches everywhere");
             }
-            return new Needle(label, List.of(new Pattern("bytes", secret.clone(), Fill.ZERO),
-                    // seclume-allow: the searcher needs the pattern it hunts for
-                    new Pattern("Base64", Base64.getEncoder().encode(secret), Fill.ASCII)));
+            List<Pattern> patterns = new ArrayList<>();
+            Encodings.ofBytes(secret).forEach((encoding, bytes) ->
+                    patterns.add(new Pattern(encoding, bytes,
+                            encoding.equals("bytes") ? Fill.ZERO : Fill.ASCII)));
+            return new Needle(label, List.copyOf(patterns));
         }
     }
 
@@ -385,6 +377,23 @@ public final class Redactor {
         }
     }
 
+    /**
+     * Whether {@code length} bytes at {@code position} lie inside a place found
+     * for the same secret already - since {@code first} - in another of its
+     * encodings: Base64 found whole and its stretch inside a longer one are one
+     * place, counted once.
+     */
+    private static boolean within(List<Region> regions, int first, long position, int length) {
+        for (int i = first; i < regions.size(); i++) {
+            Region known = regions.get(i);
+            if (known.position() <= position
+                    && position + length <= known.position() + known.length()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static void add(List<Region> regions, Region region) {
         if (regions.size() >= MOST_REGIONS) {
             throw new IllegalStateException("more than " + MOST_REGIONS + " places to "
@@ -444,13 +453,16 @@ public final class Redactor {
         int longest = needle.patterns().stream().mapToInt(p -> p.bytes().length).max()
                 .orElse(1);
         long[] count = new long[1];
+        int first = regions.size();
         windows(dump, longest, windowSize, (window, length, acceptBelow, start) -> {
             for (Needle.Pattern pattern : needle.patterns()) {
                 byte[] p = pattern.bytes();
                 for (int i = indexOf(window, length, p, 0); i >= 0 && i < acceptBelow;
                         i = indexOf(window, length, p, i + 1)) {
+                    if (!within(regions, first, start + i, p.length)) {
+                        count[0]++;
+                    }
                     add(regions, new Region(start + i, p.length, pattern.fill()));
-                    count[0]++;
                 }
             }
         });
@@ -466,6 +478,7 @@ public final class Redactor {
             int windowSize) throws IOException {
         int longest = needle.longest();
         long count = 0;
+        int known = regions.size();
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined();
              FileChannel channel = FileChannel.open(dump, StandardOpenOption.READ)) {
             long size = channel.size();
@@ -491,8 +504,10 @@ public final class Redactor {
                             if (window.get(java.lang.foreign.ValueLayout.JAVA_BYTE, i) == first
                                     && java.lang.foreign.MemorySegment.mismatch(window, i,
                                             i + n, p, 0, n) == -1) {
+                                if (!within(regions, known, start + i, n)) {
+                                    count++;
+                                }
                                 add(regions, new Region(start + i, n, pattern.fill()));
-                                count++;
                             }
                         }
                     }
@@ -596,11 +611,23 @@ public final class Redactor {
             int most = 0;
             for (ByteBuffer value : wholes) {
                 byte[] ascii = bytes(value);
-                // seclume-allow: the searcher needs the pattern it hunts for
-                byte[] base64 = Base64.getEncoder().encode(ascii);
-                most = Math.max(most, register(new Needle.Pattern("Base64", base64,
-                        Fill.ASCII)));
                 most = Math.max(most, addText(ascii));
+                // Every encoding a named secret is looked for in: an URL's
+                // password lies in Basic base64("app:" + password) too, at
+                // whatever offset "app:" leaves it, and a token as URL-safe
+                // Base64. Only aligned, padded Base64 was looked for, and the
+                // copy that kept the others passed its own check.
+                String text = new String(ascii, java.nio.charset.StandardCharsets.ISO_8859_1); // seclume-allow: the searcher holds what it hunts for
+                for (Map.Entry<String, byte[]> form : Encodings.ofText(text).entrySet()) {
+                    String label = form.getKey();
+                    byte[] pattern = form.getValue();
+                    if (label.startsWith("UTF-") || label.equals("ISO-8859-1")
+                            || pattern.length < 4) {
+                        continue;                          // the plain forms: addText's
+                    }
+                    most = Math.max(most, register(new Needle.Pattern(label, pattern,
+                            Fill.ASCII)));
+                }
             }
             for (ByteBuffer piece : pieces) {
                 if (!wholes.contains(piece)) {

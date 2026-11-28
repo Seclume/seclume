@@ -51,6 +51,13 @@ class SeclumeProcessor {
                 space.seclume.quarkus.SeclumeFieldKeys.class);
     }
 
+    /** seclume-crac's process part registered at the start, when it is on the class path. */
+    @BuildStep
+    io.quarkus.arc.deployment.AdditionalBeanBuildItem cracRegistration() {
+        return io.quarkus.arc.deployment.AdditionalBeanBuildItem.unremovableOf(
+                space.seclume.quarkus.SeclumeCracRegistration.class);
+    }
+
     /** The password check again at the start, where the runtime configuration is. */
     @BuildStep
     io.quarkus.arc.deployment.AdditionalBeanBuildItem passwordGuard() {

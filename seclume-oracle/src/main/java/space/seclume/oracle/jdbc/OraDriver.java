@@ -44,6 +44,12 @@ public final class OraDriver implements Driver {
             // The DriverManager asks around; null means "not mine".
             return null;
         }
+        // A provider's or a URL's unchecked failure, as the SQLException
+        // every pool and retry catches.
+        return space.seclume.internal.jdbc.ConnectFailures.translated(() -> open(url, properties));
+    }
+
+    private Connection open(String url, Properties properties) throws SQLException {
         OracleSession.Settings settings = OraUrl.settings(url, properties);
         return new OraConnection(space.seclume.internal.TrustChoice.using(
                 space.seclume.internal.TrustChoice.of(url, properties),

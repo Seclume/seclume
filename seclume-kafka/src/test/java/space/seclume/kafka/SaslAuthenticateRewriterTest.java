@@ -62,6 +62,43 @@ class SaslAuthenticateRewriterTest {
         client.dispose();
     }
 
+    /**
+     * A broker that answers the login with the password in its error message
+     * would put it into a String of Kafka's, and into every log of the
+     * failure. After the rewritten request the answer is masked before Kafka
+     * reads it - and once the guard's bytes are through, nothing is kept.
+     */
+    @Test
+    void theBrokersAnswerIsMaskedBeforeKafkaReadsIt() throws Exception {
+        String password = "Kafka-echo-7d1e0b";
+        SaslClient client = new PlainClient("orders", file(password));
+        byte[] message = client.evaluateChallenge(new byte[0]);
+        SaslAuthenticateRewriter rewriter = new SaslAuthenticateRewriter();
+        assertFalse(rewriter.guarding(), "guarding before any secret went out");
+        try (SecretScope out = rewriter.next(frame(message, (short) 2, "producer-1"))
+                .replacement()) {
+            assertNotNull(out);
+        }
+        assertTrue(rewriter.guarding(), "nothing guards the broker's answer");
+        byte[] answer = ("Authentication failed: invalid password " + password + " for orders")
+                .getBytes(StandardCharsets.US_ASCII);
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment plain = arena.allocate(answer.length);
+            java.lang.foreign.MemorySegment.copy(answer, 0, plain,
+                    java.lang.foreign.ValueLayout.JAVA_BYTE, 0, answer.length);
+            rewriter.mask(plain, answer.length);
+            String seen = new String(plain.toArray(java.lang.foreign.ValueLayout.JAVA_BYTE),
+                    StandardCharsets.US_ASCII);
+            assertFalse(seen.contains(password) || seen.contains("echo-7d1e"), seen);
+            assertTrue(seen.startsWith("Authentication failed"), seen);
+            java.lang.foreign.MemorySegment rest = arena.allocate(
+                    SaslAuthenticateRewriter.ECHO_GUARD_BYTES);
+            rewriter.mask(rest, SaslAuthenticateRewriter.ECHO_GUARD_BYTES);
+        }
+        assertFalse(rewriter.guarding(), "the copy of the secret was kept past its guard");
+        client.dispose();
+    }
+
     @Test
     void aLongTokenMovesTheVarintAcrossItsBoundary() throws Exception {
         // 127 bytes and more take a second varint byte, and every length after moves.
@@ -73,6 +110,40 @@ class SaslAuthenticateRewriterTest {
         assertEquals("n,,\u0001auth=Bearer " + token + "\u0001logicalCluster=lkc-123\u0001\u0001",
                 new String(authBytes(sent, (short) 2), StandardCharsets.UTF_8));
         client.dispose();
+    }
+
+    /**
+     * A broker the cluster announced beyond bootstrap.servers' domains - a
+     * compromised one, a changed advertised.listeners - would collect the
+     * PLAIN password: the placeholder is not replaced for it, and nothing goes.
+     */
+    @Test
+    void aBrokerOutsideTheBootstrapDomainsGetsNoPassword() throws Exception {
+        SaslClient client = new PlainClient("orders", file("never-to-evil"));
+        ByteBuffer request = frame(client.evaluateChallenge(new byte[0]), (short) 2, "p");
+        java.io.IOException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                java.io.IOException.class, () -> new SaslAuthenticateRewriter("evil.example:9093",
+                        "not sending the credential to broker evil.example").next(request));
+        assertTrue(refused.getMessage().contains("evil.example"), refused.getMessage());
+        client.dispose();
+    }
+
+    @Test
+    void theBrokersThatMayGetTheCredential() {
+        SeclumeSslEngineFactory factory = new SeclumeSslEngineFactory();
+        factory.configure(Map.of("bootstrap.servers", java.util.List.of("b1.kafka.corp.example:9093",
+                "10.0.0.5:9093"), SeclumeSslEngineFactory.ALLOWED_BROKERS, "*.partner.example"));
+        assertNull(factory.refusalFor("b1.kafka.corp.example"));
+        assertNull(factory.refusalFor("b7.kafka.corp.example"), "a broker in the seed's domain");
+        assertNull(factory.refusalFor("10.0.0.5"));
+        assertNull(factory.refusalFor("k.partner.example"), "an allowed suffix");
+        assertTrue(factory.refusalFor("evil.example") != null);
+        assertTrue(factory.refusalFor("10.0.0.6") != null, "an address admits itself only");
+
+        SeclumeSslEngineFactory unseen = new SeclumeSslEngineFactory();
+        unseen.configure(Map.of());
+        assertTrue(unseen.refusalFor("b1.kafka.corp.example").contains(
+                SeclumeSslEngineFactory.ALLOWED_BROKERS), "no seeds seen: nothing is sent");
     }
 
     @Test
@@ -112,6 +183,22 @@ class SaslAuthenticateRewriterTest {
         IOException twice = assertThrows(IOException.class,
                 () -> rewrite(frame(message, (short) 2, "c")));
         assertTrue(twice.getMessage().contains("stands for nothing"), twice.getMessage());
+        client.dispose();
+    }
+
+    /**
+     * The placeholder belongs in the auth bytes and nowhere else: put into
+     * the client id - a field the broker logs - it is refused, not filled in.
+     */
+    @Test
+    void aPlaceholderOutsideTheAuthBytesIsRefused() throws Exception {
+        SaslClient client = new PlainClient("orders", file("pw-outside"));
+        String message = new String(client.evaluateChallenge(new byte[0]), StandardCharsets.UTF_8);
+        String placeholder = message.substring(message.lastIndexOf('\0') + 1);
+        byte[] plainAuth = "\0orders\0nothing-to-see".getBytes(StandardCharsets.UTF_8);
+        IOException refused = assertThrows(IOException.class,
+                () -> rewrite(frame(plainAuth, (short) 2, placeholder)));
+        assertTrue(refused.getMessage().contains("outside the auth bytes"), refused.getMessage());
         client.dispose();
     }
 

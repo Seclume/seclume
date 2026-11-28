@@ -15,7 +15,14 @@ jdbc:seclume:postgresql://db:5432/app?tls=verify-full
 | `off` | no encryption |
 | `prefer` | encrypt if offered — stops a listener, not a man in the middle |
 | `require` | encrypt or refuse; still no certificate check |
-| `verify-full` | encrypt **and** check the certificate against the trust store and the host dialled |
+| `verify-full` | encrypt **and** check the certificate against the trust store and the host dialled - **the default** |
+
+**`verify-full` is what a URL without `tls=` gets** - PostgreSQL, MySQL and Oracle (over TCPS)
+alike; SQL Server always encrypts and checks the certificate unless `trustServerCertificate=true`.
+A weaker mode is a choice written into the URL, and it is named among the weakened settings
+(the start-up line and `/actuator/seclume` in Spring Boot). A server whose certificate the JVM
+does not trust is refused until it does - `tlsRootCert`, `tlsPin` or the JVM's trust store,
+below - or until the URL says `tls=require` (or `prefer`, `off`) on purpose.
 
 Only `verify-full` authenticates the server. A driver that offers the first three and calls
 the result secure is lying by omission. On PostgreSQL the login is additionally bound to the
@@ -28,11 +35,30 @@ rather than staying silent.
 after a server restart, or after `FLUSH PRIVILEGES` - `sha256_password` and
 `mysql_clear_password` (RDS IAM tokens). Under `prefer` or `require` the certificate is not
 checked, so a server in the middle that terminates TLS itself and asks for the password gets
-it; such a login is refused with SQLSTATE 28000 before a byte of the password leaves. SCRAM,
-MD5 and `mysql_native_password` send a proof, not the password, and are not affected (an
+it; such a login is refused with SQLSTATE 28000 before a byte of the password leaves (an
 OAuth token was refused the same way already). MySQL has an opt-out for whoever cannot check
 the certificate yet: `allowCleartextOverUnverifiedTls=true` in the URL, or
 `-Dseclume.mysql.allowCleartextOverUnverifiedTls=true` for the whole process.
+
+**MD5 and `mysql_native_password` too.** They send a proof, not the password - but a proof
+the server in the middle can guess against: `md5(md5(password || user) || salt)` and SHA-1
+for a salt or scramble it chose, one fast hash per guess. They are answered only to a server
+that has proved who it is as well. A MySQL login whose server proposes
+`mysql_native_password` offers `caching_sha2_password` instead, so an account with a SHA-2
+hash logs in as before; one that only has a native hash switches back and is refused. The
+opt-out is `allowLegacyHashOverUnverifiedTls=true` in the URL (PostgreSQL and MySQL), or
+`-Dseclume.postgresql.allowLegacyHashOverUnverifiedTls=true` /
+`-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true` for the process. SCRAM is not
+affected.
+
+**Revocation is not checked.** As with the JDK's default, a server certificate is checked
+against its CA and its name, not against OCSP or a CRL: a revoked certificate whose key leaked
+is accepted until it expires. Keep server certificates short-lived where that matters.
+
+**Silence and deadlines are different things.** The network timeout ends a read that hears
+nothing; a server that sends a byte now and then never trips it. The login budget
+(`seclume.loginBudgetFactor`) and the query timeout's grace (`seclume.queryTimeoutGraceSeconds`)
+are deadlines on the whole exchange - see [FEATURES.md](FEATURES.md#time-limits).
 
 ## A CA the JVM does not know, without switching the check off
 
@@ -118,7 +144,9 @@ classical, as everywhere in TLS today. In return
 it gains two things JSSE cannot offer at any price: **the traffic secrets never become Java
 objects**, and the encryption state can be frozen and taken up elsewhere, which is what a
 connection that survives moving host needs. Since the external audit of 30.09.2026 (SEC-04)
-that is why it is tried first.
+that is why it is tried first. The traffic secrets, IVs and nonces are held in `SecretScope`s
+like every other key: locked in RAM, kept out of core dumps, counted by `SecretScope.open()`
+and wiped when the connection closes or a KeyUpdate replaces them.
 
 **All four drivers are proven on it against real servers**, with TLS 1.3 and with servers held
 to TLS 1.2: PostgreSQL and MySQL, Oracle over a TCPS listener, and SQL Server on both `tds=7.4`
@@ -229,7 +257,13 @@ short grace period.
 **Or a key that never enters the process at all.** On Windows, `clientCertThumbprint=...`
 names a certificate in the certificate store, and its key is used through CNG by handle. With
 a non-exportable key not even the owning account can read it out, and enrolled with the
-Microsoft Platform Crypto Provider it lives in the TPM and never leaves it.
+Microsoft Platform Crypto Provider it lives in the TPM and never leaves it. On Linux,
+`clientCertPkcs11=/usr/lib/softhsm/libsofthsm2.so` (with `clientCertPkcs11Token` and
+`clientCertPkcs11Key`) uses a key in a PKCS#11 token - a smart card, an HSM, a TPM. The module
+is native code that runs in this process, so a URL or Properties may name only one the JVM is
+started to allow: `-Dseclume.pkcs11.modules=/usr/lib/softhsm/libsofthsm2.so` (several separated
+by the path separator). Any other is refused before it is loaded. Built in code
+(`new Pkcs11ClientIdentity(...)`), the module needs no such line.
 
 **Or a certificate from Vault, for a key made in the process.** `clientCertVaultPki-` settings
 replace the two files. The key is generated by OpenSSL or CNG, a certification request is

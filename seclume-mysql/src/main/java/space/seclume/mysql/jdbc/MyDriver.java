@@ -44,6 +44,12 @@ public final class MyDriver implements Driver {
             // The DriverManager asks around; null means "not mine".
             return null;
         }
+        // A provider's or a URL's unchecked failure, as the SQLException
+        // every pool and retry catches.
+        return space.seclume.internal.jdbc.ConnectFailures.translated(() -> open(url, properties));
+    }
+
+    private Connection open(String url, Properties properties) throws SQLException {
         MySession.Settings settings = MyUrl.settings(url, properties);
         boolean loadDataLocal = MyUrl.loadDataLocal(url, properties);
         return new MyConnection(space.seclume.internal.TrustChoice.using(
@@ -82,6 +88,10 @@ public final class MyDriver implements Driver {
                     + "sha256_password, mysql_clear_password) over TLS that did not check the "
                     + "server's certificate - off by default: it goes only to a server that "
                     + "proved who it is, tls=verify-full or tlsPin", false),
+            info("allowLegacyHashOverUnverifiedTls",
+                    "answer mysql_native_password over a connection that did not check the "
+                    + "server's certificate - off by default: its answer is a fast hash a server "
+                    + "in the middle can guess the password against", false),
         };
     }
 

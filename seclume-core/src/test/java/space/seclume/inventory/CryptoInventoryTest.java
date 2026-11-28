@@ -174,13 +174,17 @@ class CryptoInventoryTest {
         FieldKeys keys = FieldKeys.builder().key(1, new CanaryProvider(null) {
             @Override
             public int writeSecret(MemorySegment target) {
-                target.asSlice(0, 32).fill((byte) 7);
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (7 + i * 31));
+                }
                 return 32;
             }
         }).key(4, new CanaryProvider(null) {
             @Override
             public int writeSecret(MemorySegment target) {
-                target.asSlice(0, 32).fill((byte) 9);
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (9 + i * 31));
+                }
                 return 32;
             }
         }).primary(1).build();

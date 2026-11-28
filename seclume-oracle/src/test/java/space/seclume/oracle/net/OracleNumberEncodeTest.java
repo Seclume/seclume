@@ -1,6 +1,7 @@
 package space.seclume.oracle.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -72,6 +73,23 @@ class OracleNumberEncodeTest {
             OracleNumber.encode(out, value);
             int length = out.getByte(0) & 0xff;
             assertEquals(value, OracleNumber.toLong(out.segment(), 1, length));
+        }
+    }
+
+    /**
+     * A number beyond a long is refused, never wrapped round: ten base-100
+     * digits came back as 18446744073709551621 mod 2^64 = 5. The edges of a
+     * long, both signs, still read back (see above).
+     */
+    @ParameterizedTest
+    @CsvSource({"18446744073709551621", "9223372036854775808", "-9223372036854775809",
+                "100000000000000000000", "-100000000000000000000"})
+    void aNumberBeyondALongIsRefusedNotWrapped(String decimal) {
+        try (WireBuffer out = new WireBuffer(32)) {
+            OracleNumber.encodeText(out, decimal);
+            int length = out.getByte(0) & 0xff;
+            assertThrows(ArithmeticException.class,
+                    () -> OracleNumber.toLong(out.segment(), 1, length), decimal);
         }
     }
 

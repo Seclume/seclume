@@ -22,6 +22,12 @@ class MyQuotingTest {
      * returns its value, then a NUL, then whatever follows the literal.
      */
     private static String read(String sql, boolean noBackslashEscapes) {
+        if (sql.startsWith("_utf8mb4 X'")) {
+            // A value beyond ASCII goes as hex: read back as the server reads it.
+            int end = sql.indexOf('\'', 11);
+            byte[] utf8 = java.util.HexFormat.of().parseHex(sql.substring(11, end));
+            return new String(utf8, java.nio.charset.StandardCharsets.UTF_8) + "\0" + sql.substring(end + 1);
+        }
         assertEquals('\'', sql.charAt(0));
         StringBuilder value = new StringBuilder();
         int i = 1;
@@ -55,6 +61,23 @@ class MyQuotingTest {
                         literal + (noBackslashEscapes ? " (NO_BACKSLASH_ESCAPES)" : ""));
             }
         }
+    }
+
+    /**
+     * A value beyond ASCII goes as {@code _utf8mb4 X'...'}: hex digits are
+     * ASCII, so a multi-byte client character set (GBK, Big5, SJIS) cannot
+     * join a byte of the value with the escaping backslash after it.
+     */
+    @Test
+    void aValueBeyondAsciiGoesAsHexThatNoCharacterSetCanRead() {
+        String value = "\u4e2d\\' or 1=1 -- ";
+        for (boolean noBackslashEscapes : new boolean[] {false, true}) {
+            String literal = MyQuoting.literal(value, noBackslashEscapes);
+            assertTrue(literal.startsWith("_utf8mb4 X'") && literal.endsWith("'"), literal);
+            assertTrue(literal.chars().allMatch(c -> c < 0x80), literal);
+            assertEquals(value + "\0", read(literal, noBackslashEscapes), literal);
+        }
+        assertEquals("'plain'", MyQuoting.literal("plain", false), "ASCII stays a quoted literal");
     }
 
     /** What JDBC's default makes of a backslash before a quote: the rest is SQL. */

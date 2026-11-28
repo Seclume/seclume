@@ -24,14 +24,67 @@ on:
 permissions:
   contents: read
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
+  # The workflows themselves: template injection, credentials left in the
+  # checkout, caches a release could be poisoned through, excessive
+  # permissions. zizmor at a fixed version, its wheel checked by hash.
+  zizmor:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: zizmor on .github/workflows
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          cat > "$RUNNER_TEMP/zizmor.txt" <<'REQ'
+          zizmor==1.32.0 --hash=sha256:84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071
+          REQ
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/zizmor.txt"
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --min-severity medium .github/workflows
+
+  # The security regressions together - one list, .github/security-regressions.txt,
+  # and a run that fails when a class on it did not run at all.
+  security-regressions:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: sh .github/scripts/security-regressions.sh
+
   semgrep:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     container:
-      image: semgrep/semgrep:1.177.0
+      image: semgrep/semgrep:1.177.0@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: >
           semgrep scan --config p/java --config p/security-audit --config p/secrets
           --config p/github-actions --metrics=off --error --json-output=semgrep.json
@@ -57,6 +110,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -85,7 +140,7 @@ jobs:
       - name: Known vulnerabilities
         run: |
           status=0
-          docker run --rm -v "$PWD/target:/w" aquasec/trivy:0.74.0 \
+          docker run --rm -v "$PWD/target:/w" aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
             --format json --output /w/trivy.json /w/bom.json || status=$?
           if [ -f target/trivy.json ]; then

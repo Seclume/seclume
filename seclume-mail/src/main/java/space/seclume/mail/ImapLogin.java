@@ -44,6 +44,7 @@ final class ImapLogin {
             ImapLogin login = new ImapLogin(wire);
             MailEvents.login("imap", settings, login::login);
             wire.unguard();
+            wire.loggedIn();
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();
@@ -202,7 +203,8 @@ final class ImapLogin {
         }
     }
 
-    private MailException refusal(String step, String line) {
+    private MailException refusal(String step, String serverLine) {
+        String line = space.seclume.internal.ServerText.printable(serverLine);
         boolean login = step.startsWith("AUTHENTICATE") || step.equals("LOGIN")
                 || step.equals("PLAIN") || step.equals("XOAUTH2");
         return new MailException(-1, login

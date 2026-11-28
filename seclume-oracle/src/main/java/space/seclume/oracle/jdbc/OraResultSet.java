@@ -293,6 +293,10 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         int at = block.offset(column);
         int length = block.length(column);
         java.time.ZoneId zone;
+        if (length < OracleDate.DATE_LENGTH + 6) {
+            throw new SQLException("a timestamp with time zone of " + length + " bytes, where "
+                    + "it takes " + (OracleDate.DATE_LENGTH + 6), "22000");
+        }
         if (OracleDate.isRegion(in, at, length)) {
             String name = lobSession().regionName(OracleDate.regionId(in, at));
             try {
@@ -302,7 +306,16 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
                         + " (" + name + ") is not one this JVM knows", "22009", unknown);
             }
         } else {
-            zone = java.time.ZoneOffset.ofTotalSeconds(OracleDate.zoneMinutes(in, at) * 60);
+            // An offset the server cannot have meant - beyond 18 hours - left
+            // as java.time's DateTimeException, which getString does not
+            // promise. Found by OraGetterFuzzTest.
+            int minutes = OracleDate.zoneMinutes(in, at);
+            try {
+                zone = java.time.ZoneOffset.ofTotalSeconds(minutes * 60);
+            } catch (java.time.DateTimeException beyond) {
+                throw new SQLException("a time zone offset of " + minutes + " minutes, beyond "
+                        + "the 18 hours there are", "22009", beyond);
+            }
         }
         return OracleDate.fields(in, at, length).atZone(java.time.ZoneOffset.UTC)
                 .withZoneSameInstant(zone);
@@ -422,7 +435,14 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
                 text.append((char) first);
                 continue;
             }
-            int following = first >= 0xf0 ? 3 : first >= 0xe0 ? 2 : first >= 0xc0 ? 1 : -1;
+            // RFC 3629: no lead byte from 0xf8 up, and below the loop no
+            // overlong form, no surrogate, nothing beyond U+10FFFF. The lead
+            // bytes 0xf8-0xff were taken for four-byte sequences, and a code
+            // point beyond Unicode broke getString with an
+            // IllegalArgumentException (found by OraGetterFuzzTest); an
+            // overlong form gave a second spelling of '/' or a quote.
+            int following = first >= 0xf8 ? -1 : first >= 0xf0 ? 3 : first >= 0xe0 ? 2
+                    : first >= 0xc0 ? 1 : -1;
             if (following < 0 || i + following > length) {
                 text.append('�');
                 continue;
@@ -435,6 +455,10 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
                     break;
                 }
                 point = (point << 6) | (next & 0x3f);
+            }
+            int least = following == 1 ? 0x80 : following == 2 ? 0x800 : 0x10000;
+            if (point < least || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) {
+                point = -1;
             }
             if (point < 0) {
                 text.append('�');
@@ -450,8 +474,13 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
     protected long longAt(int column) throws SQLException {
         OracleColumn description = block.column(column);
         if (description.type() == OracleColumn.TYPE_NUMBER) {
-            return OracleNumber.toLong(block.data().segment(), block.offset(column),
-                    block.length(column));
+            try {
+                return OracleNumber.toLong(block.data().segment(), block.offset(column),
+                        block.length(column));
+            } catch (ArithmeticException tooLarge) {
+                throw new java.sql.SQLDataException("column " + (column + 1)
+                        + " does not fit into a long", "22003", tooLarge);
+            }
         }
         if (OracleFloat.isBinaryFloat(description.type())) {
             return (long) OracleFloat.toDouble(block.data().segment(), block.offset(column),

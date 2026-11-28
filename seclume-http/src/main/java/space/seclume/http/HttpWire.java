@@ -69,6 +69,20 @@ final class HttpWire implements AutoCloseable {
     }
 
     /**
+     * A header line: as {@link #readLine}, and the connection ending before
+     * it - which readLine answers with null, for a response that never began -
+     * is an IOException here. The header loops called isEmpty() on that null.
+     */
+    String readHeaderLine(int max) throws IOException {
+        String line = readLine(max);
+        if (line == null) {
+            throw new IOException(settings.host() + " closed the connection in the middle of "
+                    + "the response head");
+        }
+        return line;
+    }
+
+    /**
      * A line of the response head without its CRLF, as ISO-8859-1 - or null
      * when the connection ended before the first byte of it.
      */

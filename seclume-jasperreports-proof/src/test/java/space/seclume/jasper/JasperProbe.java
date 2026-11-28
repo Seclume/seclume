@@ -76,6 +76,7 @@ public final class JasperProbe {
 
         SeclumeDataSource source = new SeclumeDataSource();
         source.setHost(host);
+        source.setTls("prefer");
         source.setPort(port);
         source.setDatabase("seclume_test");
         source.setUser("seclume_test");

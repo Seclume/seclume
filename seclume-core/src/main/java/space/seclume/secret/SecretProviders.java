@@ -91,9 +91,96 @@ public final class SecretProviders {
         return settings;
     }
 
+    /**
+     * provider=process starts a program. Settings come from JDBC URLs and
+     * Properties, which some applications take from their users - so a
+     * command is run only where the JVM was started to allow it.
+     */
+    static boolean processAllowed() {
+        return Boolean.getBoolean("seclume.secret.process.allowed");
+    }
+
+    private static SecretProvider refuseProcess() {
+        throw new IllegalArgumentException("provider=process runs a program and is refused "
+                + "unless the JVM is started with -Dseclume.secret.process.allowed=true");
+    }
+
+    /**
+     * The system property naming the providers with local resources a URL or
+     * Properties may choose: {@code -Dseclume.secret.providers=file,env-file}.
+     */
+    public static final String PROVIDERS_PROPERTY = "seclume.secret.providers";
+
+    /**
+     * The providers that read something of this machine - a file, a socket, a
+     * program, the operating system's credential store - by their main name.
+     * Settings come from JDBC URLs and Properties, which some applications
+     * take from configuration others can change: whoever writes the URL also
+     * picks the host the secret goes to, and would have the machine read any
+     * file it can and send it there as the password. So these are chosen from
+     * settings only where the JVM was started to allow them; a provider built
+     * in code is the application's own decision and not affected.
+     */
+    static final Map<String, String> LOCAL = Map.ofEntries(
+            Map.entry("file", "file"), Map.entry("env-file", "env-file"),
+            Map.entry("envfile", "env-file"), Map.entry("unix-socket", "unix-socket"),
+            Map.entry("unixsocket", "unix-socket"), Map.entry("process", "process"),
+            Map.entry("dpapi", "dpapi"), Map.entry("credential-manager", "credential-manager"),
+            Map.entry("credentialmanager", "credential-manager"),
+            Map.entry("libsecret", "libsecret"), Map.entry("secret-service", "libsecret"),
+            Map.entry("keychain", "keychain"), Map.entry("shamir", "shamir"),
+            Map.entry("spiffe-jwt", "spiffe-jwt"), Map.entry("spiffejwt", "spiffe-jwt"));
+
+    /**
+     * Whether {@code kind} may be chosen from settings, given the property's
+     * value: a provider with no local resource always; one with, when the
+     * comma-separated {@code allowed} names it (by its main name or an alias).
+     */
+    static boolean chosenFromSettings(String kind, String allowed) {
+        String main = LOCAL.get(kind);
+        if (main == null) {
+            return true;
+        }
+        if (allowed == null || allowed.isBlank()) {
+            return false;
+        }
+        for (String one : allowed.split(",")) {
+            String name = one.strip().toLowerCase(Locale.ROOT);
+            if (main.equals(LOCAL.getOrDefault(name, name))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void checkChosenFromSettings(String kind) {
+        if (chosenFromSettings(kind, System.getProperty(PROVIDERS_PROPERTY))) {
+            return;
+        }
+        if ("process".equals(LOCAL.get(kind)) && processAllowed()) {
+            return;                             // its own switch, from before this list
+        }
+        String main = LOCAL.get(kind);
+        if (main.equals("process")) {
+            throw new IllegalArgumentException("provider=process runs a program and is chosen "
+                    + "from a URL or Properties only where the JVM is started to allow it: "
+                    + "-Dseclume.secret.process.allowed=true (or -D" + PROVIDERS_PROPERTY
+                    + "=process), or build the provider in code");
+        }
+        throw new IllegalArgumentException("provider=" + kind + " reads " + (main.equals("file")
+                || main.equals("env-file") || main.equals("shamir") ? "a file" : "something")
+                + " of this machine, and is chosen from a URL or Properties only where the JVM "
+                + "allows it: start it with -D" + PROVIDERS_PROPERTY + "=" + main
+                + " (a comma-separated list), or build the provider in code. Whoever writes a "
+                + "URL also picks the host the secret goes to");
+    }
+
     public static SecretProvider of(Map<String, String> settings) {
         rejectInlineSecrets(settings);
         String kind = value(settings, "provider");
+        if (kind != null) {
+            checkChosenFromSettings(kind.toLowerCase(Locale.ROOT));
+        }
         if (kind == null) {
             throw new IllegalArgumentException(
                     "no secret provider configured - set 'provider' to one of "
@@ -115,8 +202,9 @@ public final class SecretProviders {
                     SpiffeWorkloadApi.timeoutMillis("timeout-millis",
                             value(settings, "timeout-millis"),
                             UnixSocketSecretProvider.DEFAULT_TIMEOUT_MILLIS));
-            case "process" -> new ProcessSecretProvider(
-                    List.of(required(settings, "command", "process").split("\\s+")), maxLength);
+            case "process" -> processAllowed() ? new ProcessSecretProvider(
+                    List.of(required(settings, "command", "process").split("\\s+")), maxLength)
+                    : refuseProcess();
             case "dpapi" -> new DpapiSecretProvider(path(settings, "dpapi"),
                     value(settings, "entropy"), maxLength);
             case "credential-manager", "credentialmanager" -> new CredentialManagerSecretProvider(

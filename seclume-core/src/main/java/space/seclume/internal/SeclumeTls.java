@@ -37,6 +37,8 @@ import space.seclume.tls.TlsConnection;
 public final class SeclumeTls implements TlsLayer {
 
     private final TlsConnection connection;
+    /** Set by {@link TlsLayers} once the handshake is checked; null when thawed. */
+    private volatile Boolean authenticated;
 
     private SeclumeTls(TlsConnection connection) {
         this.connection = connection;
@@ -68,8 +70,9 @@ public final class SeclumeTls implements TlsLayer {
         if (alpn == null) {
             return startWithoutAlpn(transport, host, verify, identity);
         }
-        CertificateTrust trust = verify ? defaultTrust() : null;
-        return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, alpn));
+        return new SeclumeTls(verify
+                ? ClientHandshake.connect(transport, host, defaultTrust(), identity, alpn)
+                : ClientHandshake.connectWithoutAuthenticating(transport, host, identity, alpn));
     }
 
     /**
@@ -80,9 +83,10 @@ public final class SeclumeTls implements TlsLayer {
     public static SeclumeTls startOffering(Transport transport, String host, boolean verify,
             ClientIdentity identity, space.seclume.tls.ClientHello.Offer offer)
             throws IOException {
-        CertificateTrust trust = verify ? defaultTrust() : null;
-        return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, null,
-                offer));
+        return new SeclumeTls(verify
+                ? ClientHandshake.connect(transport, host, defaultTrust(), identity, null, offer)
+                : ClientHandshake.connectWithoutAuthenticating(transport, host, identity, null,
+                        offer));
     }
 
     /** The JVM's trust store - or the CA file this connection named, see {@link TrustChoice}. */
@@ -135,6 +139,15 @@ public final class SeclumeTls implements TlsLayer {
      * stack were never reached at all. An operator has the same problem for
      * the same reason.
      */
+    @Override
+    public Boolean serverAuthenticated() {
+        return authenticated;
+    }
+
+    void authenticated(boolean checked) {
+        authenticated = checked;
+    }
+
     @Override
     public String description() {
         return connection.description() + " (seclume)";

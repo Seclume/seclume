@@ -47,6 +47,7 @@ sidecar:
 spiffe:
   csiDriver: csi.spiffe.io
   hostPath: ""              # a host directory with the socket instead of the CSI driver
+  namespaces: []            # with hostPath, required: the namespaces whose pods get it
   mountPath: /spiffe-workload-api
   socket: spire-agent.sock
 

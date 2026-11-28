@@ -30,6 +30,12 @@ import space.seclume.secret.SecretScope;
 class EncryptedValueFuzzTest {
 
     private static final byte[] KEY = new byte[32];
+
+    static {
+        for (int i = 0; i < KEY.length; i++) {
+            KEY[i] = (byte) (i + 1);
+        }
+    }
     private static final byte[] KNOWN = "the only value this column was ever given"
             .getBytes(StandardCharsets.US_ASCII);
 

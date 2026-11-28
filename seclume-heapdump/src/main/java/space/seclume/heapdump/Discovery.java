@@ -201,7 +201,13 @@ public final class Discovery {
                     "A Basic password or bearer token as it is sent - a request object or a "
                             + "buffer of an HTTP client that was kept.",
                     "(?i:authorization:[ \\t]*(?:basic|bearer)[ \\t]+)"
-                            + "([A-Za-z0-9._~+/=-]{16,4096})"));
+                            + "([A-Za-z0-9._~+/=-]{16,4096})"),
+            new Detector("http-credential-value", "HTTP credential without its header name",
+                    "A Basic password or bearer token held as the header's value alone - "
+                            + "Apache's BasicHeader, the JDK's HttpClient and Spring's "
+                            + "HttpHeaders keep it without \"Authorization:\".",
+                    "(?<!(?i:authorization):[ \\t]{0,8})(?<![A-Za-z0-9])"
+                            + "(?i:(basic)|bearer)[ \\t]+([A-Za-z0-9._~+/=-]{16,4096})"));
 
     /**
      * What a value has to look like to be no example: templates, masks and
@@ -245,7 +251,9 @@ public final class Discovery {
             Map.entry("url-password", new Anchor(List.of("://"), false, 32)),
             Map.entry("url-password-parameter", new Anchor(List.of("password=", "passwd=",
                     "pwd="), true, 1)),
-            Map.entry("http-authorization", new Anchor(List.of("authorization:"), true, 0)));
+            Map.entry("http-authorization", new Anchor(List.of("authorization:"), true, 0)),
+            Map.entry("http-credential-value", new Anchor(List.of("basic ", "bearer ",
+                    "basic\t", "bearer\t"), true, 0)));
 
     /** Longest a match runs past its anchor; well inside {@link #OVERLAP}. */
     private static final int MAX_MATCH = 16 * 1024;
@@ -546,14 +554,21 @@ public final class Discovery {
         if (position < acceptFrom || position >= acceptTo) {
             return;                                 // the window next door takes it
         }
-        boolean group = matcher.groupCount() >= 1 && matcher.group(1) != null;
-        String value = group ? matcher.group(1) : matcher.group();
         Detector detector = detectors.get(d);
+        // The secret is the last group - the bare value has a first one that
+        // says Basic from Bearer.
+        int last = matcher.groupCount();
+        boolean group = last >= 1 && matcher.group(last) != null;
+        String value = group ? matcher.group(last) : matcher.group();
         if (CHOSEN.contains(detector.id()) && PLACEHOLDER.matcher(value).matches()) {
             return;
         }
-        int valueStart = group ? matcher.start(1) : matcher.start();
-        int valueEnd = group ? matcher.end(1) : matcher.end();
+        if (detector.id().equals("http-credential-value")
+                && !credentialValue(matcher.group(1) != null, value)) {
+            return;                             // "basic test", a word, a hash
+        }
+        int valueStart = group ? matcher.start(last) : matcher.start();
+        int valueEnd = group ? matcher.end(last) : matcher.end();
         if (detector.id().equals("private-key")) {
             valueEnd = pemEnd(current, matcher.end());
         }
@@ -564,6 +579,37 @@ public final class Discovery {
         if (sink != null) {
             sink.found(occurrence);
         }
+    }
+
+    /**
+     * Whether a value after a bare Basic or Bearer is a credential: Basic only
+     * where it decodes to printable text with a colon between a user and a
+     * password, Bearer from twenty characters - shorter ones and words are
+     * what prose and logs hold.
+     */
+    static boolean credentialValue(boolean basic, String value) {
+        if (!basic) {
+            return value.length() >= 20;
+        }
+        byte[] decoded;
+        try {
+            decoded = java.util.Base64.getDecoder().decode(value); // seclume-allow: the searcher decodes what it found
+        } catch (IllegalArgumentException notBase64) {
+            return false;
+        }
+        int colon = -1;
+        boolean printable = true;
+        for (int i = 0; i < decoded.length; i++) {
+            int b = decoded[i] & 0xff;
+            if (b < 0x20 || b > 0x7e) {
+                printable = false;
+            } else if (b == ':' && colon < 0) {
+                colon = i;
+            }
+        }
+        int length = decoded.length;
+        java.util.Arrays.fill(decoded, (byte) 0);
+        return printable && colon > 0 && colon < length - 1;
     }
 
     /** The run of text being matched - a Matcher does not hand its input out. */

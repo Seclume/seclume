@@ -1,5 +1,6 @@
 package space.seclume.tls;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,6 +44,8 @@ import space.seclume.internal.jdbc.TlsStack;
  * validator itself; this checks that each handshake asks it.
  */
 @Timeout(60)
+// Counts the JVM's open TLS connections: another test's handshake beside it moves the count.
+@org.junit.jupiter.api.parallel.Isolated
 class ServerAuthenticationTest {
 
     private static TestCertificates certificates;
@@ -52,6 +55,7 @@ class ServerAuthenticationTest {
     static Path directory;
 
     private static Path caFile;
+    private static String serverPin;
 
     @BeforeAll
     static void startAnAuthority() throws Exception {
@@ -66,6 +70,8 @@ class ServerAuthenticationTest {
         KeyManagerFactory keys = KeyManagerFactory.getInstance(
                 KeyManagerFactory.getDefaultAlgorithm());
         keys.init(store, TestCertificates.PASSWORD.toCharArray());
+        serverPin = TrustChoice.pinOf((java.security.cert.X509Certificate) store.getCertificate(
+                Collections.list(store.aliases()).get(0)));
         serverContext = SSLContext.getInstance("TLS");
         serverContext.init(keys.getKeyManagers(), null, null);
 
@@ -118,16 +124,82 @@ class ServerAuthenticationTest {
         }
     }
 
+    /**
+     * Whether the server was authenticated, as the layer reports it to
+     * {@code Secured.serverAuthenticated}: a chain checked or a pin compared
+     * is, a handshake that checked nothing (tls=prefer, require) is not - on
+     * both stacks, so that a pool's grade cannot call an unchecked server safe.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"SECLUME", "JSSE"})
+    void theLayerSaysWhetherTheServerWasAuthenticated(String stackName) throws Exception {
+        TlsStack stack = TlsStack.valueOf(stackName);
+        TrustChoice.Choice ca = TrustChoice.of(Map.of(TrustChoice.ROOT_CERT, caFile.toString()));
+        TrustChoice.Choice pin = TrustChoice.of(Map.of(TrustChoice.PIN, serverPin));
+        try (SSLServerSocket listener = listen("TLSv1.3")) {
+            try (TlsLayer checked = handshake(listener, stack, ca, true)) {
+                assertEquals(Boolean.TRUE, checked.serverAuthenticated(), "verify-full");
+            }
+            try (TlsLayer unchecked = handshake(listener, stack, null, false)) {
+                assertEquals(Boolean.FALSE, unchecked.serverAuthenticated(), "require");
+            }
+            try (TlsLayer pinned = handshake(listener, stack, pin, false)) {
+                assertEquals(Boolean.TRUE, pinned.serverAuthenticated(), "tlsPin");
+            }
+        }
+    }
+
+    /**
+     * A checkpoint has to know the TLS connections still open: their traffic
+     * keys are in native memory no SecretScope counts. A connection of the own
+     * stack is counted from its handshake until it is closed.
+     */
+    @org.junit.jupiter.api.Test
+    void anOpenConnectionIsCountedUntilItIsClosed() throws Exception {
+        try (SSLServerSocket listener = listen("TLSv1.3")) {
+            int before = space.seclume.internal.LiveTls.count();
+            TlsLayer open = handshake(listener, TlsStack.SECLUME,
+                    TrustChoice.of(Map.of(TrustChoice.ROOT_CERT, caFile.toString())), true);
+            assertEquals(before + 1, space.seclume.internal.LiveTls.count());
+            assertTrue(!space.seclume.internal.LiveTls.origins().isEmpty(),
+                    "an open connection names who opened it");
+            open.close();
+            assertEquals(before, space.seclume.internal.LiveTls.count());
+        }
+    }
+
+    private static TlsLayer handshake(SSLServerSocket listener, TlsStack stack,
+            TrustChoice.Choice choice, boolean verify) throws Exception {
+        int port = listener.getLocalPort();
+        return TrustChoice.using(choice, () -> {
+            try {
+                SocketTransport transport = SocketTransport.connect("localhost", port, 5000);
+                return TlsLayers.start(stack, transport, "localhost", port, verify);
+            } catch (IOException e) {
+                throw new SQLException(e);
+            }
+        });
+    }
+
     private static SSLServerSocket listen(String protocol) throws IOException {
         SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
                 .createServerSocket(0, 50, InetAddress.getLoopbackAddress());
         listener.setEnabledProtocols(new String[] {protocol});
         Thread server = new Thread(() -> {
             while (!listener.isClosed()) {
-                try (Socket socket = listener.accept()) {
-                    socket.getInputStream().read();        // runs the handshake, then waits
+                try {
+                    Socket accepted = listener.accept();
+                    // Each in its own thread: one that waits on a connection
+                    // the client left open holds up no other.
+                    Thread.ofVirtual().start(() -> {
+                        try (Socket socket = accepted) {
+                            socket.getInputStream().read();    // runs the handshake, then waits
+                        } catch (IOException ignored) {
+                            // a refused handshake, or the client gone
+                        }
+                    });
                 } catch (IOException ignored) {
-                    // a refused handshake, or the listener closing
+                    // the listener closing
                 }
             }
         });

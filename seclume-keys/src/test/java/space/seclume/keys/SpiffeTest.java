@@ -76,6 +76,8 @@ class SpiffeTest {
     private static Svid payments;
     private static byte[] otherCa;
     private static Svid partner;
+    /** A second workload of other.org, its SVID as genuine as the partner's - but not named. */
+    private static Svid stranger;
     private static Svid impostor;
 
     private static final String PARTNER = "spiffe://other.org/partner";
@@ -107,6 +109,7 @@ class SpiffeTest {
         openssl("x509", "-in", "other-ca.pem", "-outform", "DER", "-out", "other-ca.der");
         otherCa = Files.readAllBytes(directory.resolve("other-ca.der"));
         partner = svid("partner", PARTNER, "other-ca");
+        stranger = svid("stranger", "spiffe://other.org/y", "other-ca");
         impostor = svid("impostor", "spiffe://example.org/impostor", "other-ca");
         // A server for the database side: localhost, from the same CA.
         openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
@@ -325,7 +328,7 @@ class SpiffeTest {
                 space.seclume.internal.Checkpoint.wipeAll();
                 for (String by : PrivateSigningKey.heldBy()) {
                     assertFalse(by.contains("Spiffe"), "a key is still held by " + by
-                            + " - it would be in the image");
+                            + " - it would be in the image" + spiffeThreads());
                 }
                 String alias = manager.chooseServerAlias("EC", null, null);
                 assertEquals(2, manager.generations(), "the agent was not asked again");
@@ -376,7 +379,82 @@ class SpiffeTest {
 
     private static void assertNoSpiffeKey(String when) {
         for (String by : PrivateSigningKey.heldBy()) {
-            assertFalse(by.contains("Spiffe"), "a key is still held by " + by + " " + when);
+            assertFalse(by.contains("Spiffe"), "a key is still held by " + by + " " + when
+                    + spiffeThreads());
+        }
+    }
+
+    /**
+     * For a failure's message: the threads of SPIFFE key managers still alive
+     * and where each is - which one fetched the key that is still held. The
+     * failure seen only on the sanitizer job's runner did not say.
+     */
+    private static String spiffeThreads() {
+        StringBuilder out = new StringBuilder("; opened by:");
+        try {
+            java.lang.reflect.Method details = Class.forName("space.seclume.crypto.LiveKeys")
+                    .getDeclaredMethod("details");
+            details.setAccessible(true);
+            for (Object one : (List<?>) details.invoke(null)) {
+                if (String.valueOf(one).contains("Spiffe")) {
+                    out.append(" [").append(one).append(']');
+                }
+            }
+        } catch (ReflectiveOperationException unavailable) {
+            out.append(" (unavailable: ").append(unavailable).append(')');
+        }
+        out.append("; threads:");
+        Thread.getAllStackTraces().forEach((thread, frames) -> {
+            if (thread.getName().contains("spiffe") || java.util.Arrays.stream(frames)
+                    .anyMatch(f -> f.getClassName().contains("Spiffe"))) {
+                out.append(" [").append(thread.getName()).append(' ')
+                        .append(thread.getState());
+                for (int i = 0; i < Math.min(6, frames.length); i++) {
+                    String type = frames[i].getClassName();
+                    out.append(" < ").append(type.substring(type.lastIndexOf('.') + 1))
+                            .append('.').append(frames[i].getMethodName());
+                }
+                out.append(']');
+            }
+        });
+        return out.toString();
+    }
+
+    /**
+     * Without peer-ids every workload of the own trust domain is a peer - as
+     * SPIFFE means it, but a wide door: it is said once, as a warning.
+     */
+    @Test
+    void withoutPeerIdsTheWideTrustIsWarnedOf() throws Exception {
+        java.util.logging.Logger jul = java.util.logging.Logger.getLogger(
+                SeclumeKeys.class.getName());
+        List<String> warned = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel() == java.util.logging.Level.WARNING) {
+                    warned.add(record.getMessage());
+                }
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        jul.addHandler(handler);
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("wide"),
+                () -> payments.answer(PAYMENTS))) {
+            SeclumeKeys.spiffe("socket=unix://" + agent.socket() + "&peer-ids=" + PAYMENTS);
+            assertTrue(warned.isEmpty(), warned.toString());
+            SeclumeKeys.spiffe("socket=unix://" + agent.socket());
+            assertTrue(warned.stream().anyMatch(m -> m.contains("without peer-ids")),
+                    warned.toString());
+        } finally {
+            jul.removeHandler(handler);
         }
     }
 
@@ -469,7 +547,9 @@ class SpiffeTest {
      * Federation: a partner of other.org is trusted by the CAs other.org's
      * bundle names - which comes with this workload's SVID - and only while it
      * does; an SVID from other.org's CA that claims to be of example.org is
-     * refused, its chain not leading to example.org's CAs.
+     * refused, its chain not leading to example.org's CAs. A federated
+     * domain's workload is let in only when peer-ids names it: without them,
+     * only the workload's own trust domain is.
      */
     @Test
     void aFederatedTrustDomainIsTrustedByItsOwnCas() throws Exception {
@@ -486,13 +566,36 @@ class SpiffeTest {
                      // trusts the server, and it is the server that has to refuse
                      () -> FakeWorkloadApi.x509SvidResponse("spiffe://example.org/impostor",
                              impostor.certificate(), impostor.key(), ca))) {
-            SeclumeKeys.Spiffe server = SeclumeKeys.spiffe("socket=unix://" + ours.socket());
+            SSLContext partnerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                    + theirs.socket() + "&peer-ids=" + ORDERS);
+
+            // Without peer-ids, a bundle for other.org does not make its workloads peers.
+            SeclumeKeys.Spiffe ownDomainOnly = SeclumeKeys.spiffe("socket=unix://" + ours.socket());
+            SSLContext closed = SSLContext.getInstance("TLSv1.3");
+            closed.init(ownDomainOnly.keys().getKeyManagers(),
+                    ownDomainOnly.trust().getTrustManagers(), null);
+            assertThrows(Exception.class, () -> mutual(closed, partnerClient),
+                    "a federated workload was let in without peer-ids naming it");
+
+            // The impostor's id is named too: only the chain can refuse it.
+            SeclumeKeys.Spiffe server = SeclumeKeys.spiffe("socket=unix://" + ours.socket()
+                    + "&peer-ids=" + PARTNER + ",spiffe://example.org/impostor");
             SSLContext serving = SSLContext.getInstance("TLSv1.3");
             serving.init(server.keys().getKeyManagers(), server.trust().getTrustManagers(),
                     null);
-            SSLContext partnerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
-                    + theirs.socket() + "&peer-ids=" + ORDERS);
             assertEquals(PARTNER, SpiffeTrustManager.spiffeId(mutual(serving, partnerClient)));
+
+            // Another workload of the federated domain, its SVID genuine: peer-ids
+            // names the partner, not the domain - it is refused.
+            try (FakeWorkloadApi strangers = new FakeWorkloadApi(socket("stranger"),
+                    () -> FakeWorkloadApi.x509SvidResponse("spiffe://other.org/y",
+                            stranger.certificate(), stranger.key(), otherCa,
+                            Map.of("example.org", ca)))) {
+                SSLContext strangerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                        + strangers.socket() + "&peer-ids=" + ORDERS);
+                assertThrows(Exception.class, () -> mutual(serving, strangerClient),
+                        "a federated workload peer-ids does not name was let in");
+            }
 
             SSLContext impostorClient = SeclumeKeys.spiffeSslContext("socket=unix://"
                     + forged.socket());
@@ -511,6 +614,56 @@ class SpiffeTest {
                 () -> SpiffeWorkloadApi.trustDomain("https://example.org/x"));
         assertThrows(IllegalArgumentException.class,
                 () -> SpiffeWorkloadApi.trustDomain("spiffe:///x"));
+    }
+
+    /**
+     * The X509-SVID specification: a leaf is no CA and does not sign
+     * certificates. A CA certificate carrying a SPIFFE URI, issued by the
+     * trust domain's own CA, was accepted as a peer's leaf.
+     */
+    @Test
+    void aCaCertificateIsNoSvid() throws Exception {
+        openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                "-subj", "/O=example.org", "-keyout", "sub-ca.key", "-out", "sub-ca.csr");
+        Files.writeString(directory.resolve("sub-ca.ext"), "subjectAltName=URI:" + ORDERS
+                + "\nbasicConstraints=critical,CA:TRUE\nkeyUsage=keyCertSign\n");
+        openssl("x509", "-req", "-in", "sub-ca.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+                "-CAcreateserial", "-days", "2", "-extfile", "sub-ca.ext", "-outform", "DER",
+                "-out", "sub-ca.der");
+        java.security.cert.CertificateFactory factory =
+                java.security.cert.CertificateFactory.getInstance("X.509");
+        X509Certificate subCa = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(Files.readAllBytes(
+                        directory.resolve("sub-ca.der"))));
+        X509Certificate root = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(ca));
+        SpiffeTrustManager trust = new SpiffeTrustManager(domain -> List.of(root),
+                () -> List.of(root), java.util.Set.of(), () -> "example.org");
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> trust.check(new X509Certificate[] {subCa}));
+        X509Certificate leaf = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(first.certificate()));
+        trust.check(new X509Certificate[] {leaf});
+    }
+
+    /**
+     * Before the first SVID the workload has no trust domain and no bundle:
+     * nobody is a peer yet - not with peer-ids naming them either. A control:
+     * it holds before the federation fix too.
+     */
+    @Test
+    void beforeTheFirstSvidNothingIsTrusted() throws Exception {
+        X509Certificate peer = (X509Certificate) java.security.cert.CertificateFactory
+                .getInstance("X.509").generateCertificate(
+                        new java.io.ByteArrayInputStream(first.certificate()));
+        SpiffeTrustManager unknown = new SpiffeTrustManager(domain -> List.of(), List::of,
+                java.util.Set.of(), () -> null);
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> unknown.check(new X509Certificate[] {peer}));
+        SpiffeTrustManager named = new SpiffeTrustManager(domain -> List.of(), List::of,
+                java.util.Set.of(ORDERS), () -> null);
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> named.check(new X509Certificate[] {peer}));
     }
 
     /**

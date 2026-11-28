@@ -48,9 +48,16 @@ class ErrorMessageTest {
             "failed", "error", "invalid", "unsupported", "not supported",
             "bad state", "illegal state", "unknown", "unexpected", "wrong");
 
-    /** Names whose value has no business in a message. */
+    /**
+     * Names whose value has no business in a message, compared without case:
+     * {@code apiKey}, {@code PW} and {@code bearer} are as much a secret as
+     * {@code password}, and were let through. {@code key} and {@code auth}
+     * are not here: they name option keys and login methods far more often
+     * than a secret, and a rule that cries wolf is switched off.
+     */
     private static final List<String> SECRET_NAMES = List.of(
-            "password", "secret", "passphrase", "credential", "token");
+            "password", "passwd", "pw", "secret", "passphrase", "credential", "credentials",
+            "token", "apikey", "bearer");
 
     @Test
     void everyThrownMessageSaysSomething() throws IOException {
@@ -67,7 +74,10 @@ class ErrorMessageTest {
     }
 
     private static void check(Path file, List<String> findings) throws IOException {
-        String source = Files.readString(file, StandardCharsets.UTF_8);
+        check(file.toString(), Files.readString(file, StandardCharsets.UTF_8), findings);
+    }
+
+    static void check(Object file, String source, List<String> findings) {
         int at = 0;
         while ((at = source.indexOf("throw new ", at)) >= 0) {
             int end = source.indexOf(';', at);
@@ -80,6 +90,15 @@ class ErrorMessageTest {
                 continue;
             }
             int line = lineOf(source, statement, at);
+            // Before anything else: a message built in a local variable is
+            // what the checks below skip as built elsewhere.
+            String carried = allowed(source, line) ? null
+                    : builtFromASecret(source, at - statement.length(), statement);
+            if (carried != null) {
+                findings.add(file + ":" + line + " puts " + carried
+                        + " into the message, through a local variable");
+                continue;
+            }
             if (carriesTheCausesWords(statement) || messageIsBuiltElsewhere(statement)) {
                 // The message is the one the cause already wrote; repeating it
                 // here would say the same thing twice.
@@ -101,6 +120,9 @@ class ErrorMessageTest {
                 findings.add(file + ":" + line + " says only \"" + message.strip() + "\"");
             } else if (EMPTY_WORDS.contains(plain.replace(".", ""))) {
                 findings.add(file + ":" + line + " says only \"" + message.strip() + "\"");
+            }
+            if (allowed(source, line)) {
+                continue;
             }
             for (String name : SECRET_NAMES) {
                 if (concatenates(statement, name)) {
@@ -208,7 +230,9 @@ class ErrorMessageTest {
                 // The underscore counts as part of the name: SECRET_PROPERTY
                 // is a constant holding the name of a setting, not a secret.
                 char next = after >= code.length() ? ' ' : code.charAt(after);
-                boolean whole = !Character.isLetterOrDigit(next) && next != '_';
+                // "+ credentials.status()" is what a response said, not the
+                // value: a name followed by an access is something of it.
+                boolean whole = !Character.isLetterOrDigit(next) && next != '_' && next != '.';
                 if (whole) {
                     return true;
                 }
@@ -216,6 +240,46 @@ class ErrorMessageTest {
             }
         }
         return false;
+    }
+
+    /** A {@code seclume-allow:} comment on the throw's line or the one above. */
+    private static boolean allowed(String source, int line) {
+        String[] lines = source.split("\n", -1);
+        return (line - 1 < lines.length && line >= 1 && lines[line - 1].contains("seclume-allow:"))
+                || (line >= 2 && lines[line - 2].contains("seclume-allow:"));
+    }
+
+    /**
+     * A secret's name concatenated into a local variable the throw then hands
+     * over: {@code String why = "..." + password; throw new X(why)} went by,
+     * because only the throw's own text was read. The variable is looked for
+     * in the forty lines before the throw - a method's reach.
+     */
+    private static String builtFromASecret(String source, int throwAt, String statement) {
+        java.util.regex.Matcher identifiers = java.util.regex.Pattern
+                .compile("[A-Za-z_][A-Za-z0-9_]*").matcher(withoutLiterals(argumentsOf(statement)));
+        int from = throwAt;
+        for (int lines = 0; from > 0 && lines < 40; from--) {
+            if (source.charAt(from - 1) == '\n') {
+                lines++;
+            }
+        }
+        String before = withoutLiterals(source.substring(Math.max(0, from), Math.max(0, throwAt)))
+                .toLowerCase(Locale.ROOT);
+        while (identifiers.find()) {
+            String variable = identifiers.group().toLowerCase(Locale.ROOT);
+            java.util.regex.Matcher assigned = java.util.regex.Pattern
+                    .compile("\\b" + java.util.regex.Pattern.quote(variable) + "\\s*=[^=;][^;]*;")
+                    .matcher(before);
+            while (assigned.find()) {
+                for (String name : SECRET_NAMES) {
+                    if (concatenates(assigned.group(), name)) {
+                        return name;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static String withoutLiterals(String statement) {

@@ -44,6 +44,12 @@ public final class TdsDriver implements Driver {
             // The DriverManager asks around; null means "not mine".
             return null;
         }
+        // A provider's or a URL's unchecked failure, as the SQLException
+        // every pool and retry catches.
+        return space.seclume.internal.jdbc.ConnectFailures.translated(() -> open(url, properties));
+    }
+
+    private Connection open(String url, Properties properties) throws SQLException {
         TdsSession.Settings settings = TdsUrl.settings(url, properties);
         boolean varchar = TdsUrl.varcharParameters(url, properties);
         space.seclume.internal.TrustChoice.Choice trust =

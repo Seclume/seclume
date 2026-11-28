@@ -86,7 +86,7 @@ class SeclumeCdiExtensionOnceTest {
     static void configuration() throws Exception {
         StubDriver.INSTANCE.urls.size();
         keyFile = Files.createTempFile("seclume-helidon-once", ".key");
-        Files.writeString(keyFile, Base64.getEncoder().encodeToString(new byte[32]));
+        Files.writeString(keyFile, Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
         SETTINGS.put("seclume.datasources.default.url", "jdbc:seclume:stub://db/app?user=a&provider=file&path=/x");
         SETTINGS.put("seclume.datasources.orders.url", "jdbc:seclume:stub://db/orders?user=o&provider=file&path=/y");
         SETTINGS.put("seclume.field-encryption.keys.1.provider", "file");

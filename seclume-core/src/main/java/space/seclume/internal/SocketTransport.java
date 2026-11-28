@@ -191,6 +191,11 @@ public final class SocketTransport implements Transport, NetworkTimeouts.Watched
      * noticed by {@link NetworkTimeouts}, not measured here.
      */
     @Override
+    public int networkTimeoutMillis() {
+        return timeoutMillis;
+    }
+
+    @Override
     public void networkTimeout(int millis) throws IOException {
         if (millis < 0) {
             throw new IOException("a network timeout cannot be negative: " + millis);

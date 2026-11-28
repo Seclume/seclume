@@ -60,6 +60,25 @@ class OAuthClientCredentialsTest {
         }
     }
 
+    /**
+     * A token whose JSON escapes put a line break into it would end the
+     * Authorization header and start one of the server's choosing. Refused:
+     * no request goes out with it.
+     */
+    @Test
+    void aTokenWithALineBreakIsRefused() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens);
+             SeclumeHttp http = SeclumeHttp.of(url(api, tokens, ""))) {
+            tokens.tokenPrefix = "abc\\r\\nX-Evil: 1\\r\\n";
+            IOException refused = assertThrows(IOException.class,
+                    () -> text(http.send("GET", "/me", Map.of(), null)));
+            assertTrue(String.valueOf(refused.getMessage()).contains("control"),
+                    refused.getMessage());
+            assertTrue(api.received.isEmpty(), "a request went out: " + api.received);
+        }
+    }
+
     @Test
     void basicClientAuthAndTheTokenIsReused() throws Exception {
         try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
@@ -116,9 +135,18 @@ class OAuthClientCredentialsTest {
             assertEquals(2, tokens.issued.get());
 
             api.accepts = value -> false;                           // nothing will do
-            SeclumeHttp.Response refused = http.send("GET", "/c", Map.of(), null);
-            assertEquals(401, refused.status(), "one renewal, then the answer as it is");
-            refused.close();
+            // Within a second of the last renewal for a 401 there is none: an
+            // API refusing everything does not get a token fetch per request.
+            for (int i = 0; i < 5; i++) {
+                SeclumeHttp.Response refused = http.send("GET", "/c", Map.of(), null);
+                assertEquals(401, refused.status(), "the answer as it is");
+                refused.close();
+            }
+            assertEquals(2, tokens.issued.get(), "a token fetch per refused request");
+            Thread.sleep(1100);
+            SeclumeHttp.Response later = http.send("GET", "/c", Map.of(), null);
+            assertEquals(401, later.status(), "one renewal, then the answer as it is");
+            later.close();
             assertEquals(3, tokens.issued.get());
         }
     }
@@ -281,6 +309,30 @@ class OAuthClientCredentialsTest {
                 chain.append(t.getMessage()).append(" / ");
             }
             org.junit.jupiter.api.Assertions.assertTrue(chain.toString().contains("larger than"),
+                    chain.toString());
+        }
+    }
+
+    /**
+     * A token endpoint that closed the connection between two header lines:
+     * readLine said null for the end, and the header loop called isEmpty() on
+     * it - a NullPointerException where an IOException belonged.
+     */
+    @Test
+    void aTokenEndpointClosingInItsHeadersIsAnIoError() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens);
+             SeclumeHttp http = SeclumeHttp.of(url(api, tokens, ""))) {
+            tokens.rawHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n";
+            Exception refused = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> http.send("GET", "/", Map.of(), null));
+            StringBuilder chain = new StringBuilder();
+            for (Throwable t = refused; t != null; t = t.getCause()) {
+                org.junit.jupiter.api.Assertions.assertFalse(t instanceof NullPointerException,
+                        "a NullPointerException in the chain");
+                chain.append(t.getMessage()).append(" / ");
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(chain.toString().contains("closed"),
                     chain.toString());
         }
     }

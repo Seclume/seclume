@@ -19,6 +19,10 @@ import java.util.Map;
  * context) is what it reads. The pool resets the context when the connection
  * comes back. See {@link space.seclume.SessionContext} for where each
  * database keeps it and how a row-level security policy reads it.
+ *
+ * <p>Not for R2DBC: there the borrowing thread is an event loop or a thread
+ * of the pool's, and neither holds the request's tenant. A reactive
+ * application declares a {@code space.seclume.r2dbc.ReactiveSessionContext}.
  */
 @FunctionalInterface
 public interface SeclumeSessionContext {

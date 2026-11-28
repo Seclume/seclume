@@ -34,8 +34,18 @@ public final class SessionState {
     private static final Pattern IRREVERSIBLE = Pattern.compile("^alter\\s+session",
             Pattern.CASE_INSENSITIVE);
 
+    /**
+     * SQL Server's changes of identity. Its reset (RESETCONNECTION) cannot
+     * undo them: the server kills the session instead, and since the reset
+     * rides on the next request, the next borrower would get the dead session.
+     */
+    private static final Pattern IMPERSONATES = Pattern.compile(
+            "\\bexec(ute)?\\s+as\\s|\\bsetuser\\b|sp_setapprole",
+            Pattern.CASE_INSENSITIVE);
+
     private volatile boolean changed;
     private volatile boolean irreversible;
+    private volatile boolean impersonated;
     /**
      * The last text judged to set nothing - weakly, so that it lives no
      * longer than whoever passed it. A prepared statement passes the same
@@ -54,7 +64,7 @@ public final class SessionState {
 
     /** Notes one statement's text. */
     public void note(String sql) {
-        if (sql == null || (changed && irreversible)) {
+        if (sql == null || (changed && irreversible && impersonated)) { // mutation-equivalent: the early return only saves work: a statement noted again changes nothing
             return;
         }
         java.lang.ref.WeakReference<String> last = harmless;
@@ -69,6 +79,10 @@ public final class SessionState {
         changed = true;
         if ((verdict & IRREVERSIBLE_TOO) != 0) {
             irreversible = true;
+        }
+        // Only on what already sets something: the forms are among those.
+        if (!impersonated && IMPERSONATES.matcher(sql).find()) {
+            impersonated = true;
         }
     }
 
@@ -173,10 +187,19 @@ public final class SessionState {
         return irreversible;
     }
 
+    /**
+     * Whether one of them took on another identity - EXECUTE AS, SETUSER,
+     * sp_setapprole - which SQL Server's reset cannot put back.
+     */
+    public boolean impersonated() {
+        return impersonated;
+    }
+
     /** After a reset. */
     public void clear() {
         changed = false;
         irreversible = false;
+        impersonated = false;
     }
 
     /** Whether one statement's text would be noted - for the drivers' tests. */

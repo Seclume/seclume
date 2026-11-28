@@ -14,7 +14,8 @@ import space.seclume.http.SeclumeSslSocketFactory;
  * <pre>
  * ManagedChannel channel = SeclumeGrpc.channel("api.example.com", 443, "tlsRootCert=/etc/ca.pem")
  *         .build();
- * CallCredentials token = SeclumeGrpc.bearer("provider=file&amp;path=/run/secrets/token");
+ * CallCredentials token = SeclumeGrpc.bearer("provider=file&amp;path=/run/secrets/token",
+ *         "api.example.com:443");
  * GreeterGrpc.newBlockingStub(channel).withCallCredentials(token).sayHello(...);
  * </pre>
  *
@@ -47,21 +48,53 @@ public final class SeclumeGrpc {
                 .hostnameVerifier(tls.hostnameVerifier());
     }
 
-    /** {@code authorization: Bearer <token>}, the token named by the secret provider options {@code spec}. */
-    public static CallCredentials bearer(String spec) {
-        return header(AUTHORIZATION, "Bearer ", spec);
+    /**
+     * {@code authorization: Bearer <token>}, the token named by the secret
+     * provider options {@code spec}, sent to {@code server} only - the
+     * {@code host:port} of the channel. On a channel to another server the
+     * call carries the placeholder, which that server refuses.
+     *
+     * <p>Make it once per channel and keep it: each call of this registers a
+     * placeholder that stays until the process ends.
+     */
+    public static CallCredentials bearer(String spec, String server) {
+        return header(AUTHORIZATION, "Bearer ", spec, server);
     }
 
     /**
      * A header {@code name} - {@code x-api-key}, say - whose value is the
-     * secret named by {@code spec}.
+     * secret named by {@code spec}, sent to {@code server} ({@code host:port}) only.
      */
-    public static CallCredentials header(String name, String spec) {
-        return header(Metadata.Key.of(name, Metadata.ASCII_STRING_MARSHALLER), "", spec);
+    public static CallCredentials header(String name, String spec, String server) {
+        return header(Metadata.Key.of(name, Metadata.ASCII_STRING_MARSHALLER), "", spec, server);
     }
 
-    private static CallCredentials header(Metadata.Key<String> key, String prefix, String spec) {
-        String value = prefix + SeclumeSslSocketFactory.placeholder(spec);
+    /**
+     * The token bound to whichever server it is first written for - the same
+     * credentials used on a second channel, to another host, would give that
+     * host the token if it came first.
+     *
+     * @deprecated names no server; use {@link #bearer(String, String)}
+     */
+    @Deprecated(since = "0.15.0", forRemoval = true)
+    public static CallCredentials bearer(String spec) {
+        return header(AUTHORIZATION, "Bearer ", spec, null);
+    }
+
+    /**
+     * The header bound to whichever server it is first written for.
+     *
+     * @deprecated names no server; use {@link #header(String, String, String)}
+     */
+    @Deprecated(since = "0.15.0", forRemoval = true)
+    public static CallCredentials header(String name, String spec) {
+        return header(Metadata.Key.of(name, Metadata.ASCII_STRING_MARSHALLER), "", spec, null);
+    }
+
+    private static CallCredentials header(Metadata.Key<String> key, String prefix, String spec,
+                                          String server) {
+        String value = prefix + (server == null ? SeclumeSslSocketFactory.placeholder(spec)
+                : SeclumeSslSocketFactory.placeholder(spec, java.util.List.of(server)));
         return new CallCredentials() {
             @Override
             public void applyRequestMetadata(RequestInfo info, Executor executor,

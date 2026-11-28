@@ -59,6 +59,15 @@ final class FakeMySqlServer implements AutoCloseable {
     private String errorMessage;
     /** Whether to refuse the login itself - see {@link #rejectLogin()}. */
     private volatile boolean rejectLogin;
+
+    /** HandshakeResponses received - see {@link #loginAnswers()}. */
+    private final java.util.concurrent.atomic.AtomicInteger loginAnswers =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** How many login answers (HandshakeResponse41) reached this server. */
+    public int loginAnswers() {
+        return loginAnswers.get();
+    }
     private volatile boolean stopped;
     /** Whether to switch the login to MariaDB's Kerberos plugin - see {@link #switchToKerberos()}. */
     private volatile boolean kerberos;
@@ -69,6 +78,27 @@ final class FakeMySqlServer implements AutoCloseable {
         this.password = password;
         this.thread = new Thread(this::serve, "fake-mysql");
         this.thread.setDaemon(true);
+    }
+
+    /** What the driver asks after every login - see MySession.askServerIdentity. */
+    static final String IDENTITY_QUESTION = "select @@hostname, @@port, @@server_id";
+    /** The answer, {@code host:port:server_id}; see {@link #identity(String)}. */
+    private volatile String identity = "fake:3306:1";
+
+    private volatile java.util.concurrent.CountDownLatch held;
+    /** Counted down when a held statement has arrived. */
+    final java.util.concurrent.CountDownLatch arrived = new java.util.concurrent.CountDownLatch(1);
+
+    /** Every statement from now on waits for {@code release} before it is answered. */
+    FakeMySqlServer holdQueriesUntil(java.util.concurrent.CountDownLatch release) {
+        this.held = release;
+        return this;
+    }
+
+    /** Says to be another server from now on - one load balancer, two backends. */
+    FakeMySqlServer identity(String hostPortId) {
+        this.identity = hostPortId;
+        return this;
     }
 
     FakeMySqlServer answerWith(List<Column> columns, List<List<String>> rows) {
@@ -89,6 +119,14 @@ final class FakeMySqlServer implements AutoCloseable {
      * <p>For the wipe tests: the password has been read, hashed and sent by
      * then, so the refusal arrives while the driver still holds it.
      */
+    private volatile boolean echoPassword;
+
+    /** Refuse the login, repeating the password in the refusal - a server that echoes. */
+    FakeMySqlServer rejectLoginEchoingThePassword() {
+        echoPassword = true;
+        return rejectLogin();
+    }
+
     FakeMySqlServer rejectLogin() {
         this.rejectLogin = true;
         return this;
@@ -245,7 +283,9 @@ final class FakeMySqlServer implements AutoCloseable {
 
     /** The SQL texts that arrived, and {@code <reset>} for each reset - so that a test can check them. */
     List<String> received() {
-        return received;
+        synchronized (received) {
+            return List.copyOf(received);
+        }
     }
 
     void rethrowFailure() throws Exception {
@@ -284,6 +324,8 @@ final class FakeMySqlServer implements AutoCloseable {
              OutputStream out = socket.getOutputStream()) {
             sendHandshake(out);
             byte[] login = readPacket(in);
+            lastLogin = login.clone();
+            loginAnswers.incrementAndGet();
             if (switchBack) {
                 firstAnswerPlugin = pluginOf(login);
                 ByteArrayOutputStream request = new ByteArrayOutputStream();
@@ -304,8 +346,10 @@ final class FakeMySqlServer implements AutoCloseable {
                 // is then told "wrong password" would pass the test for the
                 // wrong reason.
                 checkLogin(login);
-                sendError(out, 2, 1045, "28000",
-                        "Access denied for user '" + expectedUser + "'@'localhost'");
+                sendError(out, 2, 1045, "28000", echoPassword
+                        ? "Access denied for user '" + expectedUser + "' with password '"
+                                + password + "'"
+                        : "Access denied for user '" + expectedUser + "'@'localhost'");
                 return;
             }
             checkLogin(login);
@@ -373,13 +417,44 @@ final class FakeMySqlServer implements AutoCloseable {
                 }
             }
             case 0x03 -> {                                      // COM_QUERY
-                received.add(new String(packet, 1, packet.length - 1, StandardCharsets.UTF_8));
+                String sql = new String(packet, 1, packet.length - 1, StandardCharsets.UTF_8);
+                if (sql.equals(IDENTITY_QUESTION)) {
+                    // The driver's question which server this is, after every
+                    // login: answered as a server does, and not recorded.
+                    String[] who = identity.split(":", 3);
+                    sendTextResult(out, List.of(new Column("@@hostname", 253),
+                            new Column("@@port", 8), new Column("@@server_id", 8)),
+                            List.of(List.of(who[0], who[1], who[2])));
+                    return false;
+                }
+                synchronized (received) {
+                    received.add(sql);
+                }
+                if (trickling) {
+                    // A packet of a megabyte announced, then a byte every 200 ms:
+                    // never silent, never done - and a KILL waits its turn.
+                    out.write(new byte[] {0x00, 0x00, 0x10, 0x01});
+                    out.flush();
+                    while (!stopped) {
+                        out.write('x');
+                        out.flush();
+                        Thread.sleep(200);
+                    }
+                    return true;
+                }
+                java.util.concurrent.CountDownLatch release = held;
+                if (release != null) {
+                    // A statement that runs until it is let go - long enough
+                    // for a cancellation to be attempted beside it.
+                    arrived.countDown();
+                    release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                }
                 if (errorMessage != null) {
                     sendError(out, 1, 1064, "42000", errorMessage);
                 } else if (columns.isEmpty()) {
                     sendOk(out, 1, rows.size(), 7);
                 } else {
-                    sendTextResult(out);
+                    sendTextResult(out, columns, rows);
                 }
             }
             case 0x16 -> {                                      // COM_STMT_PREPARE
@@ -420,6 +495,22 @@ final class FakeMySqlServer implements AutoCloseable {
         payload.writeBytes("mysql_native_password".getBytes(StandardCharsets.US_ASCII));
         payload.write(0);
         writePacket(out, payload.toByteArray(), 0);
+    }
+
+    private volatile byte[] lastLogin;
+
+    private volatile boolean trickling;
+
+    /** Every query from now on answered a byte every 200 ms, without end. */
+    FakeMySqlServer trickleQueries() {
+        trickling = true;
+        return this;
+    }
+
+    /** The last HandshakeResponse41 as it arrived, or null before any. */
+    byte[] lastLogin() {
+        byte[] login = lastLogin;
+        return login == null ? null : login.clone();
     }
 
     /** The plugin name at the end of a HandshakeResponse41. */
@@ -508,7 +599,8 @@ final class FakeMySqlServer implements AutoCloseable {
         writePacket(out, payload.toByteArray(), sequence);
     }
 
-    private void sendTextResult(OutputStream out) throws IOException {
+    private void sendTextResult(OutputStream out, List<Column> columns, List<List<String>> rows)
+            throws IOException {
         int sequence = 1;
         ByteArrayOutputStream count = new ByteArrayOutputStream();
         writeLengthEncoded(count, columns.size());

@@ -69,7 +69,7 @@ class LocalRichTypesTest {
                 + TestHosts.postgres() + ":" + TestHosts.postgresPort());
         url = "jdbc:seclume:postgresql://" + TestHosts.postgres()
                 + ":" + TestHosts.postgresPort() + "/" + DATABASE
-                + "?user=" + USER + "&provider=file&path="
+                + "?tls=prefer&user=" + USER + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

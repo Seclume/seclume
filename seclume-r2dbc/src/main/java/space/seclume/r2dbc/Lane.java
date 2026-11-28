@@ -76,16 +76,52 @@ final class Lane implements AutoCloseable {
         java.util.concurrent.ThreadPoolExecutor threads = new java.util.concurrent.ThreadPoolExecutor(
                 0, PLATFORM_THREADS, 60, java.util.concurrent.TimeUnit.SECONDS,
                 new java.util.concurrent.SynchronousQueue<>(),
-                Thread.ofPlatform().name("seclume-r2dbc-", 0).daemon(true).factory(),
-                (task, full) -> Thread.ofVirtual().name("seclume-r2dbc").start(task));
+                // A lane thread serves every subscriber after the one whose task
+                // started it: an InheritableThreadLocal of that one - a tenant, a
+                // principal, a transaction - would be every later one's.
+                Thread.ofPlatform().name("seclume-r2dbc-", 0).daemon(true)
+                        .inheritInheritableThreadLocals(false).factory(),
+                (task, full) -> Thread.ofVirtual().name("seclume-r2dbc")
+                        .inheritInheritableThreadLocals(false).start(task));
         return threads;
     }
 
     /** Where blocking work with no lane of its own waits: a borrow from a full pool. */
     static final Scheduler WAITING = Schedulers.fromExecutor(
-            task -> Thread.ofVirtual().name("seclume-r2dbc-borrow").start(task));
+            task -> Thread.ofVirtual().name("seclume-r2dbc-borrow")
+                    .inheritInheritableThreadLocals(false).start(task));
     private final AtomicBoolean draining = new AtomicBoolean();
     final Scheduler scheduler = Schedulers.fromExecutor(this::enqueue);
+
+    /**
+     * The statements results still hold. A result cancelled after its first
+     * row - {@code next()} - closes its statement in a task of its own, and a
+     * {@code usingWhen}'s {@code Connection.close()} can be queued before it:
+     * the pool then found the statement open on every return and counted a
+     * leak. The connection closes what is left here before it goes.
+     */
+    private final java.util.Set<java.sql.Statement> open =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    void opened(java.sql.Statement statement) {
+        open.add(statement);
+    }
+
+    void closed(java.sql.Statement statement) {
+        open.remove(statement);
+    }
+
+    /** On the lane, before the connection closes: what no result closed yet. */
+    void closeOpenStatements() {
+        for (java.sql.Statement statement : open) {
+            try {
+                statement.close();
+            } catch (java.sql.SQLException ignored) {
+                // closed either way, with the connection
+            }
+        }
+        open.clear();
+    }
 
     private void enqueue(Runnable task) {
         if (closed) {
@@ -96,7 +132,8 @@ final class Lane implements AutoCloseable {
             if (PLATFORM != null) {
                 PLATFORM.execute(this::drain);
             } else {
-                Thread.ofVirtual().name("seclume-r2dbc").start(this::drain);
+                Thread.ofVirtual().name("seclume-r2dbc").inheritInheritableThreadLocals(false)
+                        .start(this::drain);
             }
         }
     }

@@ -41,9 +41,26 @@ public final class AccessLogVerifier {
     public record Result(long first, long entries, long checkpoints, long signedUpTo, String head,
             List<String> problems) {
 
-        /** Whether nothing was found wrong. */
+        /**
+         * Whether nothing was found wrong - which proves nothing against
+         * someone who can write the file: a chain written from scratch, its
+         * checkpoints left out, holds. See {@link #vouched()}.
+         */
         public boolean holds() {
             return problems.isEmpty();
+        }
+
+        /**
+         * Whether the signing key vouches for every entry: the log holds, it
+         * was checked against a key, at least one checkpoint's signature
+         * held, no entry follows the last one, and the log starts at its first
+         * entry. This, not {@link #holds()}, is what a check against forgery
+         * asks. A log whose start is not here - a rotated file checked alone,
+         * or one cut at the start - is vouched for from {@link #first()} on
+         * only, and that is not the whole log.
+         */
+        public boolean vouched() {
+            return holds() && checkpoints > 0 && unsigned() == 0 && first == 1;
         }
 
         /** Entries after the last held checkpoint - written, but not yet vouched for. */
@@ -92,6 +109,8 @@ public final class AccessLogVerifier {
                 return new Result(0, 0, 0, 0, AccessLog.ZERO, List.copyOf(problems));
             }
         }
+        boolean openedWithTheKey = false;
+        String firstOtherOpening = null;
         String prev = AccessLog.ZERO;
         long expectedSeq = 0;
         long entries = 0;
@@ -145,6 +164,18 @@ public final class AccessLogVerifier {
                 problems.add("line " + number + ": entry " + seq
                         + " does not follow the entry before it - one was removed or slipped in");
             }
+            if ("log.opened".equals(fields.get("event")) && expectedKey != null) {
+                String signing = fields.getOrDefault("signing", "none");
+                if (signing.endsWith(" " + expectedKey)) {
+                    openedWithTheKey = true;
+                } else if (firstOtherOpening == null) {
+                    firstOtherOpening = "line " + number + ": " + (signing.equals("none")
+                            ? "the log was opened without a signing key, and it is checked "
+                                    + "against one - its signing may have been removed"
+                            : "the log was opened with another signing key (" + signing
+                                    + ") than the one it is checked against (" + expectedKey + ")");
+                }
+            }
             if ("log.opened".equals(fields.get("event")) && expectedKey != null
                     && fields.containsKey("vouched")
                     && fields.getOrDefault("signing", "").endsWith(" " + expectedKey)) {
@@ -169,6 +200,13 @@ public final class AccessLogVerifier {
                 }
             }
             prev = hash;
+        }
+        // Checked against a key, a log never once opened with it: its signing
+        // was taken out and the chain written again, or it is another log.
+        // (A log unsigned at first and opened with the key later is fine: its
+        // first checkpoint signs over what came before.)
+        if (expectedKey != null && !openedWithTheKey && firstOtherOpening != null) {
+            problems.add(firstOtherOpening);
         }
         return new Result(first, entries, checkpoints, signedUpTo, prev, List.copyOf(problems));
     }

@@ -25,7 +25,9 @@ import space.seclume.internal.SocketTransport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
+import space.seclume.internal.jdbc.Deadline;
 import space.seclume.internal.jdbc.TlsStack;
+import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
 /**
@@ -106,8 +108,13 @@ final class LdapSocket extends Socket {
         }
         SocketTransport opened = SocketTransport.connect(found.host, found.port,
                 connectTimeout > 0 ? connectTimeout : found.connectTimeout);
+        // StartTLS and the handshake as a whole, not read by read: a server that
+        // sends a byte just before each read times out held JNDI's connect for good.
+        int readTimeout = timeout > 0 ? timeout : found.timeout;
+        int budget = budgetSeconds(readTimeout);
+        Deadline handshake = Deadline.of(budget, opened::close);
         try {
-            opened.networkTimeout(timeout > 0 ? timeout : found.timeout);
+            opened.networkTimeout(readTimeout);
             if (found.startTls) {
                 startTls(opened, found);
             }
@@ -125,11 +132,41 @@ final class LdapSocket extends Socket {
             transport = opened;
         } catch (SQLException e) {
             opened.close();
-            throw e.getCause() instanceof IOException io ? io : new IOException(e.getMessage(), e);
-        } catch (IOException | RuntimeException e) {
+            throw late(handshake, budget, found,
+                    e.getCause() instanceof IOException io ? io : new IOException(e.getMessage(), e));
+        } catch (IOException e) {
+            opened.close();
+            throw late(handshake, budget, found, e);
+        } catch (RuntimeException e) {
             opened.close();
             throw e;
+        } finally {
+            handshake.close();
         }
+    }
+
+    /**
+     * The seconds StartTLS and the handshake - or a Kerberos bind - have:
+     * {@code seclume.loginBudgetFactor} (3) times the read timeout, at least one;
+     * none when reads wait for ever.
+     */
+    static int budgetSeconds(int timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            return 0;
+        }
+        long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1, (timeoutMillis * factor + 999) / 1000));
+    }
+
+    private static IOException late(Deadline deadline, int budget, LdapSettings server,
+            IOException cause) {
+        if (!deadline.expired()) {
+            return cause;
+        }
+        java.net.SocketTimeoutException late = new java.net.SocketTimeoutException("the LDAP "
+                + "server at " + server.authority() + " did not finish within " + budget + " s");
+        late.initCause(cause);
+        return late;
     }
 
     /**
@@ -223,6 +260,10 @@ final class LdapSocket extends Socket {
                     return copy;
                 }
             }
+            SecretProvider guarded = echoGuard;
+            if (guarded != null) {
+                return readMasked(target, offset, length, guarded);
+            }
             return open().read(ByteBuffer.wrap(target, offset, length));
         }
 
@@ -231,6 +272,56 @@ final class LdapSocket extends Socket {
             LdapSocket.this.close();
         }
     };
+
+    /**
+     * After a simple bind this socket wrote the password into: the secret of
+     * that bind, while what follows it is guarded - see {@link #readMasked}.
+     */
+    private volatile SecretProvider echoGuard;
+    /** How many bytes are left to guard after the bind. */
+    private int echoGuarded;
+    /** The bytes after a simple bind that are read through native memory and masked. */
+    static final int ECHO_GUARD_BYTES = 65_536;
+
+    /**
+     * The server's answer to a simple bind - and what follows it - may repeat
+     * the password it was sent: a diagnostic of "invalid credentials for ...".
+     * JNDI makes a String of that diagnostic, and the exception it throws
+     * carries it into every log. So the bytes after the bind are read into
+     * native memory first, every run of the password in them is overwritten
+     * with {@code *} ({@link space.seclume.internal.EchoMask}), and only then
+     * do they reach JNDI's buffer. Where the secret cannot be read again, the
+     * bytes are withheld: the connection ends rather than pass them on.
+     */
+    private int readMasked(byte[] target, int offset, int length, SecretProvider guarded)
+            throws IOException {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment landing = arena.allocate(length);
+            int n = open().read(landing.asByteBuffer());
+            if (n <= 0) {
+                return n;
+            }
+            try (SecretScope secret = SecretScope.fromProvider(guarded)) {
+                space.seclume.internal.EchoMask.mask(landing, n, secret.secret(),
+                        secret.length());
+            } catch (RuntimeException unreadable) {
+                landing.fill((byte) 0);
+                close();
+                throw new IOException("the LDAP server's answer after the bind could not be "
+                        + "checked for the password - the secret could not be read again; "
+                        + "the connection is closed instead");
+            }
+            MemorySegment.copy(landing, ValueLayout.JAVA_BYTE, 0, target, offset, n);
+            landing.fill((byte) 0);
+            synchronized (this) {
+                echoGuarded -= n;
+                if (echoGuarded <= 0) {
+                    echoGuard = null;
+                }
+            }
+            return n;
+        }
+    }
 
     private final OutputStream out = new OutputStream() {
         @Override
@@ -359,6 +450,12 @@ final class LdapSocket extends Socket {
                                 ? new String(password, StandardCharsets.US_ASCII) : null; // seclume-allow: the placeholder - no secret
                         LdapSettings registered = typed == null ? null
                                 : SeclumeLdap.BY_PLACEHOLDER.get(typed);
+                        if (registered != null && SeclumeLdap.SERVICE_ONLY.contains(typed)
+                                && !SeclumeLdap.inService()) {
+                            // Typed into a login form, not opened by the
+                            // application: it goes as it is, and is refused.
+                            registered = null;
+                        }
                         if (registered != null && madeFor(registered, message,
                                 (int) (name + nameHeader[0]), (int) nameHeader[1])) {
                             if (registered.kerberos) {
@@ -420,6 +517,10 @@ final class LdapSocket extends Socket {
                 p += bindAfter;
                 MemorySegment.copy(message, opEnd, w, ValueLayout.JAVA_BYTE, p, messageAfter);
                 p += messageAfter;
+                synchronized (this) {
+                    echoGuard = registered.secret;
+                    echoGuarded = ECHO_GUARD_BYTES;
+                }
                 open().write(w.asSlice(0, p).asByteBuffer());
             }
         }
@@ -431,6 +532,7 @@ final class LdapSocket extends Socket {
      * and {@code NO_PROTECTION} ({@code 0x01}) before queueing the final
      * {@code BindResponse} for JNDI's reader thread.
      */
+    @SuppressWarnings("try") // the deadline is held for its effect: it closes a stalled bind
     private void bindKerberos(byte[] message, int opStart, int op, LdapSettings registered)
             throws IOException {
         byte[] msgIdBytes = Arrays.copyOfRange(message, opStart, op);
@@ -439,7 +541,9 @@ final class LdapSocket extends Socket {
                 : target.host + ":" + target.port, "kerberos-bind");
         TlsLayer channel = open();
         ParsedResult lastResult;
-        try (Gssapi.Context gss = registered.gssSupplier.get()) {
+        int budget = budgetSeconds(timeout > 0 ? timeout : registered.timeout);
+        Deadline bound = Deadline.of(budget, this::close);
+        try (bound; Gssapi.Context gss = registered.gssSupplier.get()) {
             byte[] clientStep = gss.step(null, 0, 0);
             writeSaslBindRequest(channel, msgIdBytes, clientStep);
             lastResult = readBindResponse(channel, registered);
@@ -493,9 +597,13 @@ final class LdapSocket extends Socket {
             byte[] wrappedReply = gss.wrap(securityReply);
             writeSaslBindRequest(channel, msgIdBytes, wrappedReply);
             lastResult = readBindResponse(channel, registered);
+        } catch (IOException e) {
+            // The budget closed the socket under the bind: say that, not the
+            // read that the close broke.
+            throw late(bound, budget, registered, e);
         } catch (RuntimeException e) {
-            throw new IOException("Kerberos SASL bind on " + registered.authority()
-                    + " failed: " + e.getMessage(), e);
+            throw late(bound, budget, registered, new IOException("Kerberos SASL bind on "
+                    + registered.authority() + " failed: " + e.getMessage(), e));
         }
         byte[] finalResponse = encodeBindResponse(msgIdBytes, lastResult);
         synchronized (handshakeLock) {
@@ -643,8 +751,30 @@ final class LdapSocket extends Socket {
         return new ParsedResult(resultCode, matchedDn, diagBytes, diagnostic, serverSaslCreds);
     }
 
-    private static byte[] encodeBindResponse(byte[] msgIdBytes, ParsedResult res) {
-        int rcLen = 3;
+    /** {@code value} in as few bytes as hold it, big-endian two's complement - BER's integer. */
+    static byte[] berInteger(int value) {
+        int length = 4;
+        // A leading byte can go while the bit below it says the same as it.
+        while (length > 1) {
+            int top = value >> ((length - 1) * 8 - 1);
+            if (top != 0 && top != -1) {
+                break;
+            }
+            length--;
+        }
+        byte[] out = new byte[length];
+        for (int i = 0; i < length; i++) {
+            out[i] = (byte) (value >>> ((length - 1 - i) * 8));
+        }
+        return out;
+    }
+
+    static byte[] encodeBindResponse(byte[] msgIdBytes, ParsedResult res) {
+        // The result code as BER writes an integer: as few bytes as hold it,
+        // two's complement. One byte held 0 to 127 - a 256 went on as 0,
+        // which the application read as a successful bind.
+        byte[] code = berInteger(res.resultCode);
+        int rcLen = 2 + code.length;
         int mdnLen = 1 + lengthSize(res.matchedDn.length) + res.matchedDn.length;
         int diagLen = 1 + lengthSize(res.diagBytes.length) + res.diagBytes.length;
         int bindContent = rcLen + mdnLen + diagLen;
@@ -660,8 +790,9 @@ final class LdapSocket extends Socket {
         out[p++] = (byte) BIND_RESPONSE;
         p = putLengthArray(out, p, bindContent);
         out[p++] = (byte) ENUMERATED;
-        out[p++] = 0x01;
-        out[p++] = (byte) res.resultCode;
+        out[p++] = (byte) code.length;
+        System.arraycopy(code, 0, out, p, code.length);
+        p += code.length;
         out[p++] = (byte) OCTET_STRING;
         p = putLengthArray(out, p, res.matchedDn.length);
         System.arraycopy(res.matchedDn, 0, out, p, res.matchedDn.length);

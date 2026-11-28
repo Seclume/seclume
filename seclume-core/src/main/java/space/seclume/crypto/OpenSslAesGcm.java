@@ -65,7 +65,7 @@ final class OpenSslAesGcm implements AesGcmCipher {
     }
 
     @Override
-    public void encrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad, long aadOffset,
+    public synchronized void encrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad, long aadOffset,
                         long aadLength, MemorySegment in, long inOffset, long length,
                         MemorySegment out, long outOffset) {
         checkOpen(encrypting);
@@ -78,7 +78,7 @@ final class OpenSslAesGcm implements AesGcmCipher {
     }
 
     @Override
-    public boolean decrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad,
+    public synchronized boolean decrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad,
                            long aadOffset, long aadLength, MemorySegment in, long inOffset,
                            long length, MemorySegment out, long outOffset) {
         checkOpen(decrypting);
@@ -125,8 +125,13 @@ final class OpenSslAesGcm implements AesGcmCipher {
         return "openssl";
     }
 
+    /**
+     * Frees the native key. Synchronized with encrypt and decrypt: a close
+     * from another thread freed the context under a call still using it - a
+     * use after free in native memory that held the key schedule.
+     */
     @Override
-    public void close() {
+    public synchronized void close() {
         if (!encrypting.equals(MemorySegment.NULL)) {
             MemorySegment old = encrypting;
             encrypting = MemorySegment.NULL;

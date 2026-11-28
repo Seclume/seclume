@@ -46,11 +46,11 @@ class R2dbcTckOnMySqlTest implements TestKit<String> {
         }
         String path = password.toString().replace('\\', '/');
         factory = ConnectionFactories.get("r2dbc:seclume:mysql://seclume_test@" + HOST + ":"
-                + PORT + "/seclume_test?provider=file&path=" + path
+                + PORT + "/seclume_test?tls=prefer&provider=file&path=" + path
                 + "&options=allowPublicKeyRetrieval%3Dtrue");
         jdbc = new JdbcTemplate(new SimpleDriverDataSource(
                 new space.seclume.mysql.jdbc.MyDriver(),
-                "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test?user=seclume_test"
+                "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test?tls=prefer&user=seclume_test"
                         + "&provider=file&path=" + path + "&allowPublicKeyRetrieval=true"));
     }
 

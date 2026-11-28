@@ -73,7 +73,7 @@ class IdleLimitTest {
                         + ":1433/master?user=sa&trustServerCertificate=true",
                         ".local-mssql-password", null, null),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
-                        + "?user=seclume_test", ".local-oracle-password", null, null));
+                        + "?tls=off&user=seclume_test", ".local-oracle-password", null, null));
     }
 
     static List<Db> limited() {

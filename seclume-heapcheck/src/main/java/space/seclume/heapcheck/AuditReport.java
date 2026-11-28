@@ -346,10 +346,12 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                     : discovery.found().size() + " credential(s) of a known shape, found "
                             + "without being named.");
         }
-        row(out, "Examined", target.describe());
+        row(out, "Examined", cell(target.describe()));
         if (target.pid() != null) {
-            row(out, "JVM", target.jvm().version() + " (" + target.jvm().vendor() + ")");
-            row(out, "Runs", target.jvm().main().isEmpty() ? "-" : "`" + target.jvm().main() + "`");
+            // What the examined JVM says about itself is its own to choose.
+            row(out, "JVM", cell(target.jvm().version()) + " (" + cell(target.jvm().vendor()) + ")");
+            row(out, "Runs", target.jvm().main().isEmpty() ? "-"
+                    : "`" + code(target.jvm().main()) + "`");
         }
         row(out, "Checked at", checkedAt.toString());
         row(out, "On host", host);
@@ -372,7 +374,7 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
         out.append("## Secrets\n\n");
         out.append("| Source | Kind | Result | Findings |\n|---|---|---|---|\n");
         for (SecretResult secret : secrets) {
-            out.append("| `").append(cell(secret.source())).append("` | ")
+            out.append("| `").append(code(secret.source())).append("` | ")
                     .append(secret.binary() ? "binary" : "text").append(" | ")
                     .append(secret.found() ? "**FOUND**" : "not found").append(" | ")
                     .append(secret.findings().size()).append(" |\n");
@@ -382,7 +384,7 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
             if (!secret.found()) {
                 continue;
             }
-            out.append("### `").append(cell(secret.source())).append("`\n\n");
+            out.append("### `").append(code(secret.source())).append("`\n\n");
             out.append("| Where | Encoding | Position | Length | Held by |\n"
                     + "|---|---|---|---|---|\n");
             for (HeapDumpScanner.Finding finding : secret.findings()) {
@@ -391,7 +393,7 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 out.append("| ").append(cell(finding.source())).append(" | ")
                         .append(finding.encoding()).append(" | ").append(finding.position())
                         .append(" | ").append(finding.length()).append(" | ")
-                        .append(holder == null ? "-" : "`" + cell(holder) + "`").append(" |\n");
+                        .append(holder == null ? "-" : "`" + code(holder) + "`").append(" |\n");
             }
             out.append('\n');
         }
@@ -413,7 +415,8 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                         .append(" | ").append(found.count()).append(" | ")
                         .append(at == null ? "-" : at.encoding() + " at " + at.position())
                         .append(" | ").append(holders.isEmpty() ? "-"
-                                : "`" + cell(String.join("`, `", holders)) + "`")
+                                : String.join(", ", holders.stream()
+                                        .map(holder -> "`" + code(holder) + "`").toList()))
                         .append(" |\n");
             }
             out.append('\n');
@@ -475,10 +478,38 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
     }
 
     private static void row(StringBuilder out, String name, String value) {
-        out.append("| ").append(name).append(" | ").append(cell(value)).append(" |\n");
+        // The value is this report's own Markdown; what in it came from the
+        // dump or the examined JVM is escaped where it is put together.
+        out.append("| ").append(name).append(" | ")
+                .append(value.replace("|", "\\|").replace('\n', ' ')).append(" |\n");
     }
 
-    private static String cell(String text) {
-        return text.replace("|", "\\|").replace("\n", " ");
+    /**
+     * Text from the dump as a table cell. Class and field names come from
+     * whoever wrote the dump: escaped, a name cannot become a link, an
+     * image, emphasis or HTML in the report - only text in a cell.
+     */
+    static String cell(String text) {
+        StringBuilder out = new StringBuilder(text.length() + 8);
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\n' || c == '\r') {
+                out.append(' ');
+            } else if ("\\`*_[]()!<>#|~&".indexOf(c) >= 0) {
+                out.append('\\').append(c);
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * The same inside a code span, where a backslash is no escape: a
+     * backtick would end the span and becomes a quote, and a bar, which
+     * still ends a table cell, is escaped the way GitHub's tables read it.
+     */
+    static String code(String text) {
+        return text.replace('`', '\'').replace("|", "\\|").replace('\n', ' ').replace('\r', ' ');
     }
 }

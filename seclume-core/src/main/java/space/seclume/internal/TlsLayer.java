@@ -50,6 +50,16 @@ public interface TlsLayer extends AutoCloseable {
     String description();
 
     /**
+     * Whether the server was authenticated: its chain and host name checked,
+     * or its key compared with a pinned one. False under {@code tls=prefer} or
+     * {@code require} without a pin; {@code null} where this layer cannot say -
+     * one taken up from another machine.
+     */
+    default Boolean serverAuthenticated() {
+        return null;
+    }
+
+    /**
      * Whether this layer's state can be written down and taken up on another
      * machine.
      *

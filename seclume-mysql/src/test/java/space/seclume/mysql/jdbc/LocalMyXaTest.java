@@ -55,10 +55,11 @@ class LocalMyXaTest {
         }
     }
 
-    private static MyXaDataSource source() {
+    private static MyXaDataSource source() throws java.sql.SQLException {
         MyXaDataSource source = new MyXaDataSource();
         MyDataSource settings = source.settings();
         settings.setHost(HOST);
+        settings.setTls("prefer");
         settings.setPort(PORT);
         settings.setDatabase(DATABASE);
         settings.setUser(USER);

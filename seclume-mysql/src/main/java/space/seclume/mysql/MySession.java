@@ -85,7 +85,16 @@ public final class MySession implements AutoCloseable {
                            space.seclume.tls.ClientIdentity identity,
                            boolean tinyInt1isBit,
                            java.util.Set<String> disabledAuthenticationPlugins,
-                           boolean allowCleartextOverUnverifiedTls) {
+                           boolean allowCleartextOverUnverifiedTls,
+                           boolean allowLegacyHashOverUnverifiedTls) {
+
+        /**
+         * The same settings with TLS mode {@code mode} - for a caller that
+         * talks to a server it knows has no certificate to check, and says so.
+         */
+        public Settings withTls(TlsMode mode) {
+            return new Settings(host, port, database, user, secret, applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts, resultLimit, mode, tlsStack, identity, tinyInt1isBit, disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls, allowLegacyHashOverUnverifiedTls);
+        }
 
         /**
          * The process-wide default of {@code allowCleartextOverUnverifiedTls}:
@@ -119,6 +128,44 @@ public final class MySession implements AutoCloseable {
         /** {@link #CLEARTEXT_PROPERTY}, read when a connection is configured. */
         public static boolean cleartextByDefault() {
             return Boolean.getBoolean(CLEARTEXT_PROPERTY);
+        }
+
+        /**
+         * The process-wide default of {@code allowLegacyHashOverUnverifiedTls}:
+         * {@code -Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true}. Off.
+         */
+        public static final String LEGACY_HASH_PROPERTY =
+                "seclume.mysql.allowLegacyHashOverUnverifiedTls";
+
+        public static boolean legacyHashByDefault() {
+            return Boolean.getBoolean(LEGACY_HASH_PROPERTY);
+        }
+
+        /** Everything as it is, and the same with allowCleartextOverUnverifiedTls given. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean tinyInt1isBit,
+                        java.util.Set<String> disabledAuthenticationPlugins,
+                        boolean allowCleartextOverUnverifiedTls) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, identity,
+                    tinyInt1isBit, disabledAuthenticationPlugins,
+                    allowCleartextOverUnverifiedTls, legacyHashByDefault());
+        }
+
+        /**
+         * The same settings, with {@code mysql_native_password} allowed over a
+         * connection whose server is not authenticated - the explicit opt-out
+         * from {@link MySession#refuseLegacyHash}.
+         */
+        public Settings allowingLegacyHash() {
+            return new Settings(host, port, database, user, secret, applicationName,
+                    connectTimeoutMillis, allowPublicKeyRetrieval, hosts, resultLimit, tls,
+                    tlsStack, identity, tinyInt1isBit, disabledAuthenticationPlugins,
+                    allowCleartextOverUnverifiedTls, true);
         }
 
         /** Every plugin the driver speaks allowed - what a URL without the option means. */
@@ -186,7 +233,7 @@ public final class MySession implements AutoCloseable {
                         int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
                         HostList hosts) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE, TlsMode.PREFER);
+                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE, TlsMode.VERIFY_FULL);
         }
 
         /** With a result limit but the default TLS mode. */
@@ -195,7 +242,7 @@ public final class MySession implements AutoCloseable {
                         int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
                         HostList hosts, ResultLimit resultLimit) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    allowPublicKeyRetrieval, hosts, resultLimit, TlsMode.PREFER);
+                    allowPublicKeyRetrieval, hosts, resultLimit, TlsMode.VERIFY_FULL);
         }
 
         public Settings(String host, int port, String database, String user,
@@ -220,7 +267,8 @@ public final class MySession implements AutoCloseable {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
                     resultLimit, tls, tlsStack, identity, tinyInt1isBit,
-                    disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls);
+                    disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls,
+                    allowLegacyHashOverUnverifiedTls);
         }
 
     }
@@ -570,7 +618,12 @@ public final class MySession implements AutoCloseable {
             // to reach the same instance, and on a host list the one that
             // answered is not necessarily the first.
             opened.settings = settings;
+            opened.askServerIdentity();
             return opened;
+        } catch (SQLException e) {
+            // The login budget closed the connection: that is what happened,
+            // not the read or write the close broke.
+            throw space.seclume.internal.Transports.late(e);
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "mysql",
                     settings.host() + ":" + settings.port(), settings.database(),
@@ -625,7 +678,8 @@ public final class MySession implements AutoCloseable {
             // that answer, so anything later would be too late.
             clientCapabilities = negotiateTls(channel, settings, clientCapabilities, greeting);
 
-            String plugin = firstPlugin(settings, greeting.plugin());
+            String plugin = firstPlugin(settings, greeting.plugin(),
+                    authenticatedServer(channel, settings));
             // From here on it is the login and nothing else - the greeting is
             // read and TLS is up. Timed apart because the three phases of an
             // open are slow for three different reasons; see
@@ -737,6 +791,11 @@ public final class MySession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /** What the greeting packet holds - the scramble sits beside it, off-heap. */
     private record Handshake(String version, long connectionId, int capabilities, String plugin) {
     }
@@ -804,6 +863,15 @@ public final class MySession implements AutoCloseable {
         }
     }
 
+    /** A HandshakeResponse field ends at the first zero byte; one inside would shift every field after it. */
+    static String handshakeValue(String what, String value) throws SQLException {
+        if (value.indexOf('\0') >= 0) {
+            throw new SQLException(what + " holds a zero byte, which would end it and shift "
+                    + "the fields after it", "08001");
+        }
+        return value;
+    }
+
     /**
      * Writes the login answer.
      *
@@ -823,8 +891,8 @@ public final class MySession implements AutoCloseable {
             out.putByte(CHARSET_UTF8MB4);
             out.putZeroes(23);                     // Fueller, so will es das Protokoll
             // The URL's user, or a dynamic secret's own (Vault's database engine).
-            out.putCString(space.seclume.secret.DynamicUser.loginUser(settings.user(),
-                    settings.secret()));
+            out.putCString(handshakeValue("user", space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                    settings.secret())));
 
             int lengthAt = out.position();
             out.putByte((byte) 0);                 // a placeholder for the length
@@ -838,7 +906,7 @@ public final class MySession implements AutoCloseable {
             out.putByteAt(lengthAt, (byte) written);
 
             if (MyCapabilities.has(clientCapabilities, MyCapabilities.CONNECT_WITH_DB)) {
-                out.putCString(settings.database());
+                out.putCString(handshakeValue("database", settings.database()));
             }
             if (MyCapabilities.has(clientCapabilities, MyCapabilities.PLUGIN_AUTH)) {
                 out.putCString(plugin);
@@ -984,7 +1052,7 @@ public final class MySession implements AutoCloseable {
                         return;
                     }
                     case MyPackets.ERR -> {
-                        SQLException failure = readError(in, "the server rejected the login");
+                        SQLException failure = readLoginError(in, settings);
                         channel.endPacket();
                         throw failure;
                     }
@@ -997,6 +1065,9 @@ public final class MySession implements AutoCloseable {
                         in.skip(1);
                         currentPlugin = in.readCString();
                         refuseDisabled(settings, currentPlugin);
+                        if ("mysql_native_password".equals(currentPlugin)) {
+                            refuseLegacyHash(settings, authenticatedServer(settings));
+                        }
                         if (KERBEROS_PLUGIN.equals(currentPlugin)) {
                             String principal = in.readCString();
                             channel.endPacket();
@@ -1074,7 +1145,7 @@ public final class MySession implements AutoCloseable {
                 int first = channel.nextPacket();
                 WireBuffer in = channel.packet();
                 if (first == MyPackets.ERR) {
-                    SQLException failure = readError(in, "the server rejected the login");
+                    SQLException failure = readLoginError(in, settings);
                     channel.endPacket();
                     throw failure;
                 }
@@ -1286,6 +1357,51 @@ public final class MySession implements AutoCloseable {
     public static final java.util.Set<String> PLUGINS = java.util.Set.of("mysql_native_password",
             "caching_sha2_password", "sha256_password", "mysql_clear_password",
             "auth_gssapi_client", "client_ed25519", "parsec");
+
+    /**
+     * The plugin of the first answer, given whether the server has proved who
+     * it is. {@code mysql_native_password} is not computed for one that has
+     * not: its answer is a fast hash of the password over the server's
+     * scramble, and a server in the middle of unverified TLS collects it to
+     * guess against. {@code caching_sha2_password} is offered instead - an
+     * account that only has a native hash switches back, and is refused there
+     * ({@link #refuseLegacyHash}).
+     */
+    static String firstPlugin(Settings settings, String proposed, boolean authenticated)
+            throws SQLException {
+        if ("mysql_native_password".equals(proposed) && legacyRefused(settings, authenticated)) {
+            if (settings.disabledAuthenticationPlugins().contains("caching_sha2_password")) {
+                refuseLegacyHash(settings, authenticated);
+            }
+            return "caching_sha2_password";
+        }
+        return firstPlugin(settings, proposed);
+    }
+
+    private static boolean legacyRefused(Settings settings, boolean authenticated) {
+        return !authenticated && !settings.allowLegacyHashOverUnverifiedTls();
+    }
+
+    /**
+     * {@code mysql_native_password} only to a server that has proved who it
+     * is: tls=verify-full or tlsPin. {@code allowLegacyHashOverUnverifiedTls}
+     * (or {@code -Dseclume.mysql.allowLegacyHashOverUnverifiedTls}) allows it
+     * anyway - for an account that cannot move to caching_sha2_password yet.
+     */
+    static void refuseLegacyHash(Settings settings, boolean authenticated)
+            throws java.sql.SQLInvalidAuthorizationSpecException {
+        if (!legacyRefused(settings, authenticated)) {
+            return;
+        }
+        throw new java.sql.SQLInvalidAuthorizationSpecException("the server asks for "
+                + "mysql_native_password, whose answer a server in the middle can take and guess "
+                + "the password against - it goes only to a server whose certificate was checked, "
+                + "and this connection does not check it (tls=" + settings.tls().name()
+                        .toLowerCase(java.util.Locale.ROOT).replace('_', '-') + "). Use "
+                + "tls=verify-full or tlsPin, or move the account to caching_sha2_password; "
+                + "allowLegacyHashOverUnverifiedTls=true allows it anyway. Nothing was sent",
+                "28000");
+    }
 
     /**
      * The plugin the first answer is computed with. The server proposes one;
@@ -1590,6 +1706,7 @@ public final class MySession implements AutoCloseable {
             out.putIntLe(statement.statementId());
             out.putByte((byte) 0);                   // no cursor
             out.putIntLe(1);                         // iterations, always 1
+            sensitive = parameters.sensitive();
             parameters.write(out, statement.parameterCount());
             channel.end();
             channel.flush();
@@ -1751,6 +1868,7 @@ public final class MySession implements AutoCloseable {
         out.putIntLe(statement.statementId());
         out.putByte((byte) 0);                    // no cursor
         out.putIntLe(1);                          // one repetition
+        sensitive = parameters.sensitive();
         parameters.write(out, statement.parameterCount());
         channel.end();
         pipelineGroup++;
@@ -1861,6 +1979,7 @@ public final class MySession implements AutoCloseable {
             out.putIntLe(statement.statementId());
             out.putByte(CURSOR_TYPE_READ_ONLY);
             out.putIntLe(1);                         // one repetition
+            sensitive = parameters.sensitive();
             parameters.write(out, statement.parameterCount());
             channel.end();
             channel.flush();
@@ -1977,6 +2096,7 @@ public final class MySession implements AutoCloseable {
                     out.putIntLe(statement.statementId());
                     out.putByte((byte) 0);               // no cursor
                     out.putIntLe(1);                     // iterations, always 1
+                    sensitive = parameters.sensitive();
                     parameters.write(out, statement.parameterCount());
                     channel.end();
                     at++;
@@ -2059,8 +2179,14 @@ public final class MySession implements AutoCloseable {
      * connection would turn a slow query into a lost connection, and in a pool
      * under load that is the worse of the two.
      *
+     * <p>The second connection goes to the same host name, and behind a load
+     * balancer that need not be the same server: there the same id may be
+     * another session of the same user. So before the {@code KILL} it says
+     * which server it reached, and where that is not this session's server
+     * nothing is killed and the cancellation is refused.
+     *
      * <p>Safe from another thread - it touches nothing this session owns
-     * except two values written once during the login.
+     * except values written once during the login.
      *
      * @throws SQLException if this session cannot be cancelled, or the second
      *                      connection could not be made
@@ -2077,7 +2203,26 @@ public final class MySession implements AutoCloseable {
             // MyChannel#isAwaitingAnswer.
             return;
         }
+        String here = serverIdentity;
+        if (here == null) {
+            // Running, and not one of ours: the only command that can be in
+            // flight before the identity is known is the question for it.
+            if (identityOwed) {
+                return;
+            }
+            throw new SQLException("not cancelled: this server did not say which server it is "
+                    + "(@@hostname, @@port, @@server_id), so a second connection could not "
+                    + "confirm it reached the same one before a KILL QUERY", "0A000");
+        }
         try (MySession aside = openOne(where)) {
+            aside.settleReset();
+            String there = aside.serverIdentity();
+            if (!here.equals(there)) {
+                // Behind a load balancer: the same id there is another session.
+                throw new SQLException("not cancelled: the connection for the KILL QUERY "
+                        + "reached another server than the one this session is on - the "
+                        + "same connection id there belongs to somebody else", "0A000");
+            }
             aside.execute("kill query " + connectionId);
         }
     }
@@ -2139,17 +2284,90 @@ public final class MySession implements AutoCloseable {
     }
 
     /**
+     * Which server this session is on, as {@code host:port:server_id} - what
+     * a cancellation compares before it kills anything. Null until the
+     * answer is read, and null for good where the server refused to say.
+     */
+    private volatile String serverIdentity;
+    /** The question behind {@link #serverIdentity} is sent and not yet answered. */
+    private volatile boolean identityOwed;
+
+    /**
+     * Asks which server this is, without waiting for the answer: it is read
+     * before the next command, so the login costs no extra round trip.
+     *
+     * <p>{@code KILL QUERY <id>} runs on a second connection to the same
+     * host name, and behind a load balancer or a router that connection can
+     * reach another backend - where the same id may be somebody else's
+     * session of the same user, and their statement would be stopped. Both
+     * MySQL and MariaDB know these three variables.
+     */
+    private void askServerIdentity() throws SQLException {
+        try {
+            // MariaDB: the role the login activated, too - see putRolesBack.
+            channel.beginCommand(COM_QUERY).putText(isMariaDb()
+                    ? "select @@hostname, @@port, @@server_id, current_role()"
+                    : "select @@hostname, @@port, @@server_id");
+            channel.end();
+            channel.flush();
+            identityOwed = true;
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        }
+    }
+
+    private void settleIdentity() throws SQLException {
+        if (!identityOwed) {
+            return;
+        }
+        identityOwed = false;
+        String[] seen = new String[1];
+        try {
+            String[] role = new String[1];
+            boolean[] roleRead = new boolean[1];
+            readResult(row -> {
+                seen[0] = row.getString(0) + ":" + row.getString(1) + ":" + row.getString(2);
+                if (isMariaDb()) {
+                    role[0] = row.getString(3);
+                    roleRead[0] = true;
+                }
+            }, false);
+            serverIdentity = seen[0];
+            loginRole = role[0];
+            loginRoleKnown = roleRead[0];
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        } catch (SQLException refused) {
+            if (!channel.isOpen()) {
+                throw refused;
+            }
+            // A server, or something in front of it, that will not say: then
+            // nothing can confirm a cancellation's target - see cancel().
+        }
+    }
+
+    /** {@code host:port:server_id} of the server, once known - see {@link #askServerIdentity}. */
+    String serverIdentity() {
+        return serverIdentity;
+    }
+
+    /**
      * Reads the answer to a reset sent at the last return. A refused reset
      * ends the session: whatever the last borrower left in it is still there,
      * and the next one must not get it.
      */
     public void settleReset() throws SQLException {
+        settleIdentity();                        // sent before anything else, read first
         if (!resetOwed) {
             return;
         }
         resetOwed = false;
         try {
             readOkOrError("resetting the connection");
+            if (rolesOwed) {
+                rolesOwed = false;
+                readOkOrError("putting the login's roles back");
+            }
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             reprepared.clear();
             throw brokenConnection(e);
@@ -2195,6 +2413,7 @@ public final class MySession implements AutoCloseable {
         try {
             command(COM_RESET_CONNECTION);
             channel.end();
+            rolesOwed = putRolesBack();
             for (String sql : usedSinceReset) {
                 if (plans.containsKey(sql)) {
                     channel.beginCommand(COM_STMT_PREPARE).putText(sql);
@@ -2214,6 +2433,52 @@ public final class MySession implements AutoCloseable {
         pendingClose.clear();
     }
 
+    /** A SET ROLE sent behind the last deferred reset, its answer not read yet. */
+    private boolean rolesOwed;
+
+    /** MariaDB: the role the login activated (null: none), once {@link #loginRoleKnown}. */
+    private volatile String loginRole;
+    private volatile boolean loginRoleKnown;
+
+    /**
+     * Whether a reset can put the login's roles back: always on MySQL; on
+     * MariaDB once the login's role is known - if the server would not say,
+     * the connection is closed rather than lent with the last borrower's role.
+     */
+    public boolean rolesCanBePutBack() throws SQLException {
+        if (!isMariaDb()) {
+            return true;
+        }
+        settleIdentity();
+        return loginRoleKnown;
+    }
+
+    /**
+     * Writes {@code SET ROLE DEFAULT} behind a reset, in the same write: MySQL's
+     * COM_RESET_CONNECTION leaves the active roles as the last borrower set
+     * them (MySQL 8.4 and MariaDB 11.4, measured), and the next borrower would
+     * act with them. On MySQL DEFAULT is what a login activates; MariaDB has
+     * no SET ROLE DEFAULT, so the role its login activated is set again, read
+     * at the login (see {@link #askServerIdentity}).
+     *
+     * @return whether one was written, whose answer is owed
+     */
+    private boolean putRolesBack() {
+        String sql;
+        if (!isMariaDb()) {
+            sql = "SET ROLE DEFAULT";
+        } else if (!loginRoleKnown) {
+            // MyConnection asked rolesCanBePutBack first; here as a last guard.
+            throw new IllegalStateException("the login's role is not known");
+        } else {
+            sql = loginRole == null ? "SET ROLE NONE"
+                    : "SET ROLE `" + loginRole.replace("`", "``") + "`";
+        }
+        channel.beginCommand(COM_QUERY).putText(sql);
+        channel.end();
+        return true;
+    }
+
     /**
      * {@code COM_RESET_CONNECTION} - resets session variables, temporary
      * tables and prepared statements without logging in again. Exactly what a
@@ -2223,8 +2488,12 @@ public final class MySession implements AutoCloseable {
         try {
             command(COM_RESET_CONNECTION);
             channel.end();
+            boolean roles = putRolesBack();
             channel.flush();
             readOkOrError("resetting the connection");
+            if (roles) {
+                readOkOrError("putting the login's roles back");
+            }
             usedSinceReset.clear();
             // The server dropped every prepared statement with the rest. A
             // cached plan kept here would name a statement id that no longer
@@ -2488,8 +2757,17 @@ public final class MySession implements AutoCloseable {
      * on 25.09.2026: an error packet with state 08 left the session open.
      */
     private SQLException serverError(WireBuffer in, String context) {
+        if (!sensitive.isEmpty()) {
+            // Duplicate entry '...' for key ...: the value is in the message
+            // itself - masked before it becomes one. See SensitiveEcho.
+            space.seclume.internal.jdbc.SensitiveEcho.mask(in.segment(), in.position(),
+                    in.position() + in.remaining(), sensitive);
+        }
         return readError(in, context);
     }
+
+    /** The values the statement under way bound with setSensitive. */
+    private java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive = java.util.List.of();
 
     /** After the error packet has been consumed: close on a connection-class state. */
     private void closeIfConnectionFailure(SQLException failure) {
@@ -2497,6 +2775,29 @@ public final class MySession implements AutoCloseable {
         if (state != null && state.startsWith("08")) {
             channel.close();
         }
+    }
+
+    /**
+     * The server's refusal of the login, with the password taken out of it
+     * first. sha256_password and caching_sha2_password over TLS, and
+     * mysql_clear_password, send the password itself; a server - or one in
+     * the middle given it - may repeat it in its refusal, and the message
+     * would have it on the heap and in every log. The secret is read again
+     * into native memory for this, and the packet masked before it is text;
+     * where it cannot be read, the message is withheld whole.
+     */
+    private static SQLException readLoginError(WireBuffer in, Settings settings) {
+        int from = in.position();
+        int length = in.limit() - from;
+        try (SecretScope secret = SecretScope.fromProvider(settings.secret())) {
+            space.seclume.internal.EchoMask.mask(in.segment().asSlice(from, length), length,
+                    secret.secret(), secret.length());
+        } catch (RuntimeException unreadable) {
+            // Past the error number and the SQLState: the text goes, the codes stay.
+            int text = Math.min(length, 9);
+            in.segment().asSlice(from + text, length - text).fill((byte) '*');
+        }
+        return readError(in, "the server rejected the login");
     }
 
     /** An error packet: number, SQLState and message. */
@@ -2508,7 +2809,7 @@ public final class MySession implements AutoCloseable {
             in.skip(1);
             sqlState = in.readString(5);
         }
-        String message = in.readString(in.remaining());
+        String message = space.seclume.internal.ServerText.printable(in.readString(in.remaining()));
         return failure(context + ": " + message, sqlState, errorNumber);
     }
 

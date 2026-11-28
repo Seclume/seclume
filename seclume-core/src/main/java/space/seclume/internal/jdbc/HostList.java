@@ -33,8 +33,51 @@ import java.util.List;
  */
 public final class HostList {
 
-    /** One server: where it listens. */
+    /**
+     * One server: where it listens.
+     *
+     * <p>The host is a name, an IPv4 address or an IPv6 address - nothing
+     * else, checked here for every driver and for every list: the URL's
+     * first host, its failover hosts, and what a topology adds. It goes into
+     * DNS, into the TLS server name and into log lines; a space, a slash, an
+     * {@code @} or a control character in it was taken as it stood.
+     */
     public record Host(String host, int port) {
+
+        public Host {
+            host = checked(host);
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("port " + port + " is not a port");
+            }
+        }
+
+        private static String checked(String host) {
+            if (host == null || host.isEmpty() || host.length() > 253) {
+                throw new IllegalArgumentException("no usable host name: "
+                        + (host == null ? "none" : host.isEmpty() ? "empty" : "too long"));
+            }
+            boolean bracketed = host.startsWith("[") && host.endsWith("]");
+            String inner = bracketed ? host.substring(1, host.length() - 1) : host;
+            boolean v6 = inner.indexOf(':') >= 0;
+            for (int i = 0; i < inner.length(); i++) {
+                char c = inner.charAt(i);
+                boolean fine = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                        || (c >= '0' && c <= '9') || c == '.' || c == '-'
+                        || (!v6 && c == '_')                     // _service names in DNS
+                        || (v6 && (c == ':' || c == '%'));        // fe80::1%eth0
+                if (!fine) {
+                    throw new IllegalArgumentException("the host \""
+                            + space.seclume.internal.ServerText.printable(host)
+                            + "\" is not a host name or an address - character " + (i + 1)
+                            + " is not one a host has");
+                }
+            }
+            if (bracketed && !v6) {
+                throw new IllegalArgumentException("brackets are for an IPv6 address, not \""
+                        + host + "\"");
+            }
+            return host;
+        }
 
         @Override
         public String toString() {

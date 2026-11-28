@@ -76,28 +76,75 @@ class PoolMetricsAndHealthTest {
         }
     }
 
-    /** A pool that hands out nothing is not healthy, and says why. */
+    /**
+     * A pool with every connection handed out was borrowed from anyway: the
+     * probe waited the pool's whole timeout, took the next free connection
+     * from a request, and reported DOWN - an instance taken out for being
+     * busy. It is not borrowed from now, and reported from its numbers as
+     * UNKNOWN, which does not take the instance out.
+     */
     @Test
-    void aPoolThatCannotHandOutAnythingIsDown() throws Exception {
+    void aPoolWithNothingToSpareIsNotBorrowedFrom() throws Exception {
         PoolSettings settings = new PoolSettings();
-        settings.setName("stuck");
+        settings.setName("busy");
         settings.setMaximumPoolSize(1);
-        settings.setConnectionTimeout(java.time.Duration.ofMillis(120));
+        settings.setConnectionTimeout(java.time.Duration.ofSeconds(20));
         try (SeclumePool pool = new SeclumePool(new OneConnection(), settings);
              Connection held = pool.getConnection()) {
             assertNotNull(held);
+            long started = System.nanoTime();
+            Health health = new SeclumePoolHealth(List.of(pool)).health();
+            assertTrue(System.nanoTime() - started < 2_000_000_000L, "the probe waited");
+            assertEquals(Status.UNKNOWN, health.getStatus());
+            String detail = String.valueOf(health.getDetails().get("busy"));
+            assertTrue(detail.contains("1 of 1 in use") && detail.contains("not borrowed"), detail);
+        }
+    }
+
+    /** A server that refuses new connections is down, and the probe says so. */
+    @Test
+    void aServerThatRefusesIsDown() throws Exception {
+        OneConnection server = new OneConnection();
+        server.refusing = true;
+        try (SeclumePool pool = pool("refused", server)) {
             Health health = new SeclumePoolHealth(List.of(pool)).health();
             assertEquals(Status.DOWN, health.getStatus());
-            assertTrue(String.valueOf(health.getDetails().get("stuck")).contains("in use"));
+            assertTrue(String.valueOf(health.getDetails().get("refused")).contains("08001"),
+                    health.getDetails().toString());
+        }
+    }
+
+    /** Probes that come together borrow once: the answer is kept for two seconds. */
+    @Test
+    void anAnswerIsKeptForTwoSeconds() throws Exception {
+        PoolSettings settings = new PoolSettings();
+        settings.setName("cached");
+        settings.setMaximumPoolSize(1);
+        try (SeclumePool pool = new SeclumePool(new OneConnection(), settings)) {
+            long[] now = {0};
+            SeclumePoolHealth probe = new SeclumePoolHealth(List.of(pool), () -> now[0]);
+            assertEquals(Status.UP, probe.health().getStatus());
+            try (Connection held = pool.getConnection()) {
+                assertNotNull(held);
+                now[0] = 1_900_000_000L;
+                assertEquals(Status.UP, probe.health().getStatus(), "asked again within 2 s");
+                now[0] = 2_100_000_000L;
+                assertEquals(Status.UNKNOWN, probe.health().getStatus(),
+                        "not asked again after 2 s");
+            }
         }
     }
 
     private static SeclumePool pool(String name) {
+        return pool(name, new OneConnection());
+    }
+
+    private static SeclumePool pool(String name, OneConnection server) {
         PoolSettings settings = new PoolSettings();
         settings.setName(name);
         settings.setMaximumPoolSize(2);
         settings.setConnectionTimeout(java.time.Duration.ofSeconds(2));
-        return new SeclumePool(new OneConnection(), settings);
+        return new SeclumePool(server, settings);
     }
 
     private static double value(MeterRegistry registry, String name) {
@@ -176,8 +223,14 @@ class PoolMetricsAndHealthTest {
     /** A data source that hands out connections which do nothing. */
     private static final class OneConnection implements DataSource {
 
+        /** Set: the server refuses every new connection, as one that is down does. */
+        volatile boolean refusing;
+
         @Override
-        public Connection getConnection() {
+        public Connection getConnection() throws SQLException {
+            if (refusing) {
+                throw new java.sql.SQLNonTransientConnectionException("refused", "08001");
+            }
             return (Connection) java.lang.reflect.Proxy.newProxyInstance(
                     OneConnection.class.getClassLoader(), new Class<?>[] {Connection.class},
                     (proxy, method, arguments) -> switch (method.getName()) {

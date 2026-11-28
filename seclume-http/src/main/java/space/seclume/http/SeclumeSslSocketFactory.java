@@ -110,6 +110,10 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
      * redirect's, a URL someone else chose - it goes as the placeholder, and
      * that server refuses it. For a secret that several servers take, see
      * {@link #placeholder(String, Collection)}.
+     *
+     * <p><b>Make it once and keep it.</b> A placeholder stays registered -
+     * it may still be in a client's hands - until {@link #forget(String)}
+     * takes it back; one made per request grows the registry without end.
      */
     public static String placeholder(String spec) {
         return placeholder(spec, java.util.List.of());
@@ -131,6 +135,18 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
             options.put("max-length", "16384");           // a JWT - a Kubernetes token - is kilobytes
         }
         return CredentialPlaceholders.register(SecretProviders.of(options), servers);
+    }
+
+    /**
+     * Takes back a placeholder this class handed out: a request that still
+     * carries it is refused from then on, and its secret provider is closed.
+     * For a client that is done - a short-lived job, a test - not for each
+     * request.
+     *
+     * @return whether it was one handed out here and not yet taken back
+     */
+    public static boolean forget(String placeholder) {
+        return CredentialPlaceholders.forget(placeholder);
     }
 
     /** For clients that ask: accepts the hostnames seclume's TLS already checked. */
@@ -178,7 +194,19 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
         // TCP only: seclume's TLS runs over it before a byte is written - see over().
         Socket plain = new Socket(); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         plain.connect(new InetSocketAddress(host, port), connectTimeout);
-        return CredentialSocket.over(plain, host, port, trust, http2);
+        // This socket is ours, so the handshake's time limit is too: with none,
+        // a server that took the connection and said nothing held the handshake
+        // for good. connectTimeout bounds each of its reads; the socket is handed
+        // out as a new one is, without a read timeout, for the caller to set.
+        try {
+            plain.setSoTimeout(Math.max(0, connectTimeout));
+        } catch (IOException | RuntimeException e) {
+            plain.close();
+            throw e;
+        }
+        Socket tls = CredentialSocket.over(plain, host, port, trust, http2);
+        tls.setSoTimeout(0);
+        return tls;
     }
 
     @Override
@@ -189,13 +217,13 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
 
     @Override
     public Socket createSocket(InetAddress host, int port) throws IOException {
-        return createSocket(host.getHostName(), port);
+        return createSocket(new java.net.InetSocketAddress(host, port).getHostString(), port);
     }
 
     @Override
     public Socket createSocket(InetAddress address, int port, InetAddress localAddress,
                                int localPort) throws IOException {
-        return createSocket(address.getHostName(), port);
+        return createSocket(new java.net.InetSocketAddress(address, port).getHostString(), port);
     }
 
     @Override

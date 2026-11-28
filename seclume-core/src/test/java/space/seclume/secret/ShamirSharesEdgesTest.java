@@ -303,4 +303,52 @@ class ShamirSharesEdgesTest {
             assertEquals("a secret of 1 to 1024 bytes can be split, not " + length, e.getMessage());
         }
     }
+
+    /** A share of another format version - its magic one digit off - is named as not a share. */
+    @Test
+    void aShareWithAnotherMagicIsRefused() {
+        // The checksum computed over the altered line: refused for its magic,
+        // not for a checksum that no longer matches.
+        for (String magic : new String[] {"seclume-share-2", "Seclume-share-1"}) {
+            String body = magic + ".0123456789abcdef.2.1." + hexValue(17);
+            CRC32 crc = new CRC32();
+            crc.update(body.getBytes(StandardCharsets.US_ASCII));
+            String other = body + "." + String.format(Locale.ROOT, "%08x", crc.getValue());
+            assertTrue(refusal(other).contains("not a seclume share"), other);
+        }
+    }
+
+    /** A checksum of zero is a checksum like any other: compared, not taken as "none". */
+    @Test
+    void aCrcOfZeroIsChecked() {
+        String share = line("0123456789abcdef", "2", "1", hexValue(17));
+        String zero = share.substring(0, share.length() - 8) + "00000000";
+        assertTrue(refusal(zero).contains("checksum does not match"), refusal(zero));
+    }
+
+    /** Shares of one split identifier that disagree on the threshold are not combined. */
+    @Test
+    void sharesOfDifferentThresholdsAreRefused() {
+        try (Arena arena = Arena.ofConfined()) {
+            ShamirShares.Share two = parse(arena, line("0123456789abcdef", "2", "1", hexValue(17)));
+            ShamirShares.Share three = parse(arena, line("0123456789abcdef", "3", "2", hexValue(17)));
+            SecretUnavailableException e = assertThrows(SecretUnavailableException.class,
+                    () -> ShamirShares.combine(List.of(two, three), arena.allocate(64)));
+            assertTrue(e.getMessage().contains("does not match share 1 in threshold"), e.getMessage());
+        }
+    }
+
+    /** 1 to 255 shares: 0 and 256 are refused, 255 are written. */
+    @Test
+    void theShareCountIsBounded() throws IOException {
+        Path file = Files.write(directory.resolve("bounded"), new byte[] {7, 8, 9});
+        for (int count : new int[] {0, 256}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ShamirShares.split(new FileSecretProvider(file, 16), 2, count,
+                            directory.resolve("n" + count)));
+            assertEquals("1 to 255 shares, not " + count, e.getMessage());
+        }
+        assertEquals(255, ShamirShares.split(new FileSecretProvider(file, 16), 2, 255,
+                directory.resolve("n255")).size());
+    }
 }

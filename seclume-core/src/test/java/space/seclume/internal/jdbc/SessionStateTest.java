@@ -75,6 +75,43 @@ class SessionStateTest {
     }
 
     /**
+     * The pre-filters skip the expression for most statements; at their edges
+     * they must still let through what sets something - a temporary table by
+     * '#', a user variable by ':=' - and nothing else.
+     */
+    @Test
+    void thePreFiltersLetThroughWhatSetsSomethingAtTheirEdges() {
+        for (String sql : new String[] {"select 1 into #kept", "SELECT a INTO #t FROM b",
+            "select @x := 1", "select @total:=@total+1 from t", "create table #t (a int)"}) {
+            assertTrue(SessionState.sets(sql), sql);
+        }
+        for (String sql : new String[] {"select '#'", "select a from b where c = '#1'",
+            "select @x", "select a := 1", "select 'a:=b'", "select 1 # a comment"}) {
+            assertFalse(SessionState.sets(sql), sql);
+        }
+    }
+
+    /** SQL Server's changes of identity, which its reset answers by killing the session. */
+    @Test
+    void impersonationIsNotedApart() {
+        for (String sql : new String[] {"execute as user = 'guest'", "EXEC AS LOGIN = 'x'",
+            "select 1; execute as user = 'guest'", "setuser 'guest'",
+            "exec sp_setapprole 'r', 'p'"}) {
+            SessionState state = new SessionState();
+            state.note(sql);
+            assertTrue(state.impersonated(), sql);
+            state.clear();
+            assertFalse(state.impersonated(), sql);
+        }
+        for (String sql : new String[] {"set nocount on", "exec sp_set_session_context 'a', 'b'",
+            "select executed_as from t"}) {
+            SessionState state = new SessionState();
+            state.note(sql);
+            assertFalse(state.impersonated(), sql);
+        }
+    }
+
+    /**
      * A text judged harmless is not judged again when the same String comes
      * back - a prepared statement run over and over. What sets something is
      * never skipped: after a reset it is noted again.

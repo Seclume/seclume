@@ -141,8 +141,16 @@ public final class JdbcUrl {
         }
         // Several servers, separated by commas, are allowed here: that is how
         // failover is configured, and the same spelling other drivers use.
-        HostList hosts = HostList.parse(
-                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort)
+        HostList written = HostList.parse(
+                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort);
+        // Patroni names the members; only the URL's own hosts may be one. An
+        // answer over plain HTTP, or from a host taken over, would otherwise
+        // send the login to any server it names.
+        java.util.List<String> urlHosts = new java.util.ArrayList<>();
+        for (HostList.Host host : written.hosts()) {
+            urlHosts.add(host.host());
+        }
+        HostList hosts = written
                 // targetServerType=primary|secondary|any, the name pgjdbc
                 // uses. It belongs on the list rather than on the connection:
                 // it says which of these servers to take, and with one server
@@ -156,7 +164,7 @@ public final class JdbcUrl {
                 // patroni=http://db1:8008,...: the cluster says where its leader
                 // is now - see PatroniTopology.
                 .discovering(space.seclume.internal.jdbc.PatroniTopology.of(
-                        options.get("patroni")));
+                        options.get("patroni"), urlHosts, options.get("patroniHosts")));
         // aurora=true: the instances an Aurora cluster reported, remembered
         // for the next connect - see AuroraTopology.
         space.seclume.internal.jdbc.AuroraTopology aurora =
@@ -168,18 +176,59 @@ public final class JdbcUrl {
         if (database.isEmpty()) {
             database = options.getOrDefault("database", "");
         }
+        identityPlain("the database", database);
+        for (Map.Entry<String, String> option : options.entrySet()) {
+            if (IDENTITY.contains(normalize(option.getKey()))) {
+                identityPlain("the option " + option.getKey(), option.getValue());
+            }
+        }
         return new Parsed(hosts.first().host(), hosts.first().port(), database, options, hosts);
     }
 
+    /**
+     * The options every driver writes into its login as text - each protocol
+     * frames them its own way (a NUL, a length, a key=value list), and a
+     * control character in one has ended a field or started another in all
+     * four before. Refused here, once, before any socket is opened.
+     */
+    private static final java.util.Set<String> IDENTITY = java.util.Set.of("user", "username",
+            "database", "databasename", "applicationname", "programname", "servicename");
+
+    private static void identityPlain(String what, String value) {
+        if (value == null) {
+            return;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                throw new IllegalArgumentException(what + " holds a control character (at "
+                        + i + ") - refused, it would end its field in the login");
+            }
+        }
+    }
+
+    /**
+     * The query's options. A key given twice is refused: the last one used to
+     * win, so {@code ...?tls=verify-full&...&tls=off} was off, and anything
+     * that appended an option to an application's URL - a migration, a
+     * template, a value someone else chose - could turn a protection off.
+     * Keys compare as {@link #normalize} has them: {@code tls-Pin} is
+     * {@code tlspin}.
+     */
     private static void parseQuery(String query, Map<String, String> into) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
         for (String pair : query.split("&")) {
             if (pair.isEmpty()) {
                 continue;
             }
             int equals = pair.indexOf('=');
-            String key = equals < 0 ? pair : pair.substring(0, equals);
+            String key = decode(equals < 0 ? pair : pair.substring(0, equals));
             String value = equals < 0 ? "" : pair.substring(equals + 1);
-            into.put(decode(key), decode(value));
+            if (!seen.add(normalize(key))) {
+                throw new IllegalArgumentException("the URL gives " + key + " twice - which one "
+                        + "counts would be a guess; give it once");
+            }
+            into.put(key, decode(value));
         }
     }
 
@@ -249,19 +298,33 @@ public final class JdbcUrl {
      * password may be quoted and have one.
      */
     private static void hideLoginPassword(String url, boolean[] hidden) {
-        int authority = url.indexOf("//");
+        // A // in quotes may be an Oracle password's - "a//b" - or the start of
+        // a quoted authority. Taken for the authority only, the Oracle rule never
+        // applied and the whole password was shown; so both readings are made,
+        // and whatever either hides is hidden.
+        int anywhere = url.indexOf("//");
+        int outside = firstOutsideQuotes(url, "//");
+        hideOracleLogin(url, hidden, outside);
+        hideAuthorityLogin(url, hidden, anywhere);
+        if (outside != anywhere) {
+            hideAuthorityLogin(url, hidden, outside);
+        }
+    }
+
+    private static void hideOracleLogin(String url, boolean[] hidden, int authority) {
         int oracleAt = firstOutsideQuotes(url, '@');
         if (oracleAt >= 0 && (authority < 0 || oracleAt < authority)) {
             int slash = url.indexOf('/');
             if (slash >= 0 && slash < oracleAt) {
                 java.util.Arrays.fill(hidden, slash + 1, oracleAt, true);
-                return;
             }
             // No user/password before that @: Oracle's EZConnect "thin:@//"
-            // with a user:password@ typed into its authority. Returning here
-            // showed that password in the message (JdbcUrlRedactEdgeTest) -
-            // the authority's rule below applies to it as to any other URL.
+            // with a user:password@ typed into its authority - the authority's
+            // rule applies to it as to any other URL (JdbcUrlRedactEdgeTest).
         }
+    }
+
+    private static void hideAuthorityLogin(String url, boolean[] hidden, int authority) {
         if (authority < 0) {
             return;
         }
@@ -277,6 +340,19 @@ public final class JdbcUrl {
         if (at > authority && colon >= 0 && colon < at) {
             java.util.Arrays.fill(hidden, colon + 1, at, true);
         }
+    }
+
+    private static int firstOutsideQuotes(String text, String wanted) {
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (!quoted && text.startsWith(wanted, i)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static int firstOutsideQuotes(String text, char wanted) {
@@ -308,10 +384,20 @@ public final class JdbcUrl {
         boolean[] loginHidden = hidden.clone();
         int i = 0;
         boolean quoted = false;
+        // Which syntax a value is in: inside ( ) - MySQL's key-value hosts, an
+        // Oracle descriptor - values end at , and ); outside, where ; separates
+        // the settings - SQL Server's, jTDS's, DB2's - only a ; ends one, and
+        // a , ( ) " in it is the value's. One set for both cut a SQL Server
+        // password at its ( or , and a MySQL one at its ;, the rest shown.
+        int depth = 0;
         while (i < url.length()) {
             char c = url.charAt(i);
             if (c == '"') {
                 quoted = !quoted;
+            } else if (!quoted && c == '(') {
+                depth++;
+            } else if (!quoted && c == ')' && depth > 0) {
+                depth--;
             }
             // A ? in the login's password is the password's, not the query's.
             if (quoted || (c != '=' && c != '?') || (c == '?' && loginHidden[i])) {
@@ -322,6 +408,12 @@ public final class JdbcUrl {
                 break;
             }
             int end = i + 1;
+            if (end < url.length() && url.charAt(end) == '(') {
+                // address=(host=...)(...), DESCRIPTION=(ADDRESS=...): what follows
+                // is structure, whose own values are hidden as such.
+                i = end;
+                continue;
+            }
             if (end < url.length() && url.charAt(end) == '{') {
                 end++;
                 while (end < url.length()) {
@@ -336,7 +428,8 @@ public final class JdbcUrl {
                     end++;
                 }
             } else {
-                while (end < url.length() && ";,()".indexOf(url.charAt(end)) < 0) {
+                String ends = depth > 0 ? ",)" : ";";
+                while (end < url.length() && ends.indexOf(url.charAt(end)) < 0) {
                     end++;
                 }
             }

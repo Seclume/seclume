@@ -88,6 +88,11 @@ class CleartextPasswordTest {
      * returns what comes back - the PasswordMessage's body, or null for nothing.
      */
     private static CompletableFuture<byte[]> serve(ServerSocket listener) {
+        return serve(listener, false);
+    }
+
+    /** The same; with {@code echo}, its refusal repeats the password it was given. */
+    private static CompletableFuture<byte[]> serve(ServerSocket listener, boolean echo) {
         return CompletableFuture.supplyAsync(() -> {
             try (Socket plain = listener.accept()) {
                 plain.setSoTimeout(30_000);
@@ -116,7 +121,11 @@ class CleartextPasswordTest {
                     return null;
                 }
                 byte[] body = in.readNBytes(readInt(in) - 4);
-                byte[] error = "SFATAL\0C28P01\0Mno\0\0".getBytes(StandardCharsets.US_ASCII);
+                byte[] error = (echo
+                        ? "SFATAL\0C28P01\0Mpassword authentication failed for \""
+                                + new String(body, 0, body.length - 1, StandardCharsets.US_ASCII)
+                                + "\"\0\0"
+                        : "SFATAL\0C28P01\0Mno\0\0").getBytes(StandardCharsets.US_ASCII);
                 out.write('E');
                 writeInt(out, 4 + error.length);
                 out.write(error);
@@ -126,6 +135,79 @@ class CleartextPasswordTest {
                 throw new IllegalStateException(e);
             }
         });
+    }
+
+    /**
+     * The same server, letting the client in without a password - trust - and
+     * then holding the session open until the client goes.
+     */
+    private static CompletableFuture<Void> serveTrusted(ServerSocket listener) {
+        return CompletableFuture.runAsync(() -> {
+            try (Socket plain = listener.accept()) {
+                plain.setSoTimeout(30_000);
+                InputStream request = plain.getInputStream();
+                request.readNBytes(readInt(request) - 4);           // SSLRequest
+                plain.getOutputStream().write('S');
+                plain.getOutputStream().flush();
+                SSLSocket tls = (SSLSocket) serverContext.getSocketFactory()
+                        .createSocket(plain, "127.0.0.1", plain.getPort(), true);
+                tls.setUseClientMode(false);
+                tls.startHandshake();
+                InputStream in = tls.getInputStream();
+                OutputStream out = tls.getOutputStream();
+                in.readNBytes(readInt(in) - 4);                      // startup message
+                out.write('R');
+                writeInt(out, 8);
+                writeInt(out, 0);                                    // AuthenticationOk
+                for (String[] parameter : new String[][] {{"server_version", "18.0"},
+                    {"client_encoding", "UTF8"}, {"integer_datetimes", "on"},
+                    {"DateStyle", "ISO, MDY"}, {"TimeZone", "UTC"}}) {
+                    byte[] body = (parameter[0] + "\0" + parameter[1] + "\0")
+                            .getBytes(StandardCharsets.US_ASCII);
+                    out.write('S');
+                    writeInt(out, 4 + body.length);
+                    out.write(body);
+                }
+                out.write('K');
+                writeInt(out, 12);
+                writeInt(out, 7);
+                writeInt(out, 9);
+                out.write('Z');
+                writeInt(out, 5);
+                out.write('I');
+                out.flush();
+                while (in.read() >= 0) {
+                    // until the client goes
+                }
+            } catch (IOException e) {
+                // the client went
+            }
+        });
+    }
+
+    /**
+     * serverAuthenticated() through a real session: false where TLS checked
+     * nothing (tls=require), true where the server's key was checked (a pin).
+     */
+    @Test
+    void theSessionSaysWhetherTheServerWasAuthenticated() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Void> served = serveTrusted(listener);
+            try (PgSession session = PgSession.open(settings(listener.getLocalPort(),
+                    TlsMode.REQUIRE))) {
+                assertEquals(Boolean.FALSE, session.serverAuthenticated(), "tls=require checked nothing");
+            }
+            served.get(30, TimeUnit.SECONDS);
+        }
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Void> served = serveTrusted(listener);
+            TrustChoice.Choice pin = TrustChoice.of("jdbc:x://h/db?tlsPin=" + serverPin, null);
+            try (PgSession session = TrustChoice.using(pin,
+                    () -> PgSession.open(settings(listener.getLocalPort(), TlsMode.VERIFY_FULL)))) {
+                assertEquals(Boolean.TRUE, session.serverAuthenticated(), "the pinned key was checked");
+            }
+            served.get(30, TimeUnit.SECONDS);
+        }
     }
 
     private static int readInt(InputStream in) throws IOException {
@@ -177,6 +259,29 @@ class CleartextPasswordTest {
                         refused.getMessage());
                 assertNull(received.get(30, TimeUnit.SECONDS), "the password went out");
             }
+        }
+    }
+
+    /**
+     * A server - or one in the middle that was given the password - repeats it
+     * in its refusal: "password authentication failed for "hunter2"". The
+     * driver made a String of that message, the exception carried it, and
+     * every log of the exception. It is masked before it is text.
+     */
+    @Test
+    void anEchoedPasswordNeverBecomesText() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<byte[]> received = serve(listener, true);
+            TrustChoice.Choice pin = TrustChoice.of("jdbc:x://h/db?tlsPin=" + serverPin, null);
+            SQLException failed = assertThrows(SQLException.class, () -> TrustChoice.using(pin,
+                    () -> PgSession.open(settings(listener.getLocalPort(), TlsMode.REQUIRE)))
+                    .close());
+            received.get(30, TimeUnit.SECONDS);
+            java.io.StringWriter all = new java.io.StringWriter();
+            failed.printStackTrace(new java.io.PrintWriter(all));
+            assertTrue(!all.toString().contains(PASSWORD) && !all.toString().contains("hunter2"),
+                    "the echoed password is in the exception: " + failed.getMessage());
+            assertEquals("28P01", failed.getSQLState());
         }
     }
 

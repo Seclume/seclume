@@ -15,6 +15,17 @@ interface BearerSource extends AutoCloseable {
     /** The API refused what was sent: the next request gets a fresh one. */
     void invalidate();
 
+    /**
+     * The API answered 401: whether to start over with a fresh one now. A
+     * source that fetches its token may say no to one fetched a moment ago -
+     * an API that answers 401 to everything would otherwise have every
+     * request fetch a token.
+     */
+    default boolean refusedByApi() {
+        invalidate();
+        return true;
+    }
+
     @Override
     void close();
 }

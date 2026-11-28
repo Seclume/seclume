@@ -26,7 +26,7 @@ final class SelfSignedJwt implements BearerSource {
     private final JwtSettings jwt;
     private final SeclumeJwt signer;
     private String token;                   // guarded by this
-    private long renewAt;                   // epoch seconds
+    private long renewAt;                   // System.nanoTime(): a clock set back kept an expired token
 
     SelfSignedJwt(JwtSettings jwt, SecretProvider key) {
         this.jwt = jwt;
@@ -40,7 +40,8 @@ final class SelfSignedJwt implements BearerSource {
 
     private synchronized String current() {
         long now = Instant.now().getEpochSecond();
-        if (token == null || now >= renewAt) {
+        long ticking = System.nanoTime();
+        if (token == null || ticking - renewAt >= 0) {
             Map<String, Object> claims = new LinkedHashMap<>();
             claims.put("iss", jwt.issuer);
             if (jwt.subject != null) {
@@ -52,7 +53,8 @@ final class SelfSignedJwt implements BearerSource {
             claims.put("iat", now - 60);
             claims.put("exp", now + jwt.ttlSeconds);
             token = signer.sign(claims);
-            renewAt = now + jwt.ttlSeconds - Math.min(30, jwt.ttlSeconds / 10);
+            renewAt = ticking + java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                    jwt.ttlSeconds - Math.min(30, jwt.ttlSeconds / 10));
         }
         return token;
     }

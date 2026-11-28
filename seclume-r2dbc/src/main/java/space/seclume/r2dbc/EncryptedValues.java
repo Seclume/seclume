@@ -59,7 +59,11 @@ public final class EncryptedValues {
         return decrypt(row.get(name, ByteBuffer.class), column, target);
     }
 
-    /** How many bytes the value at {@code index} decrypts to, or -1 for NULL. */
+    /**
+     * How many bytes the value at {@code index} decrypts to - at most, for a
+     * padded value - or -1 for NULL: a size for the buffer, the length is what
+     * the decryption returns.
+     */
     public static int length(Readable row, int index, EncryptedColumn column) {
         ByteBuffer stored = row.get(index, ByteBuffer.class);
         return stored == null ? -1 : column.plaintextLength(bytes(stored));

@@ -181,6 +181,9 @@ public final class SecretWatch implements AutoCloseable {
                         .mismatch(fingerprint.segment().asSlice(0, 32)) < 0) {
                     return false;
                 }
+                if (!settled()) {
+                    return false;                   // still being written: the next look decides // mutation-equivalent: it returns false already
+                }
                 MemorySegment.copy(candidate.segment(), 0, fingerprint.segment(), 0, 32);
             }
         }
@@ -201,6 +204,29 @@ public final class SecretWatch implements AutoCloseable {
         Observed.endSecretRotation(event, name, reason.isEmpty(), reason);
         return true;
     }
+
+    /**
+     * Whether the changed secret reads the same once more, a moment later.
+     * A file rewritten without a rename - echo > file - can be read half
+     * written, and taking up half a password is a failed login, or on Oracle
+     * and MySQL a locked account. Reads before the rotation is believed.
+     */
+    private boolean settled() {
+        try {
+            Thread.sleep(SETTLE_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        try (SecretScope again = SecretScope.allocateShared(32)) {
+            return fingerprint(again.segment())
+                    && again.segment().asSlice(0, 32).mismatch(candidate.segment().asSlice(0, 32))
+                    < 0;
+        }
+    }
+
+    /** How long after a change the secret is read once more to confirm it. */
+    static final long SETTLE_MILLIS = 100;
 
     /** The keyed fingerprint of the secret now, into {@code out}; false if unreadable. */
     private boolean fingerprint(MemorySegment out) {

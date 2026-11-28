@@ -66,13 +66,52 @@ final class ScriptedMongoServer implements AutoCloseable {
         this.proofDumpFile = path;
     }
 
+    /** Keystore and certificate, made once: two keytool processes cost a second a test. */
+    private static byte[][] material;
+
+    private static synchronized byte[][] material() throws Exception {
+        if (material == null) {
+            Path dir = Files.createTempDirectory("scripted-mongo");
+            try {
+                generate(dir.resolve("keystore.p12"), dir.resolve("cert.pem"));
+                material = new byte[][] {Files.readAllBytes(dir.resolve("keystore.p12")),
+                        Files.readAllBytes(dir.resolve("cert.pem"))};
+            } finally {
+                Files.deleteIfExists(dir.resolve("keystore.p12"));
+                Files.deleteIfExists(dir.resolve("cert.pem"));
+                Files.deleteIfExists(dir);
+            }
+        }
+        return material;
+    }
+
     static ScriptedMongoServer start(Path tempDir, Mode mode, String user, byte[] serverKey)
             throws Exception {
+        Path keystore = tempDir.resolve("keystore.p12");
+        Path cert = tempDir.resolve("cert.pem");
+        byte[][] made = material();
+        Files.write(keystore, made[0]);
+        Files.write(cert, made[1]);
+
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (InputStream in = Files.newInputStream(keystore)) {
+            ks.load(in, "password".toCharArray());
+        }
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(ks, "password".toCharArray());
+        SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+        sslContext.init(kmf.getKeyManagers(), null, null);
+
+        SSLServerSocket socket = (SSLServerSocket) sslContext.getServerSocketFactory()
+                .createServerSocket(0, 5, InetAddress.getLoopbackAddress());
+        socket.setEnabledProtocols(new String[] {"TLSv1.3"});
+        return new ScriptedMongoServer(socket, tempDir, cert, mode, user, serverKey);
+    }
+
+    private static void generate(Path keystore, Path cert) throws Exception {
         boolean windows = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
         Path keytool = Path.of(System.getProperty("java.home"), "bin",
                 windows ? "keytool.exe" : "keytool");
-        Path keystore = tempDir.resolve("keystore.p12");
-        Path cert = tempDir.resolve("cert.pem");
 
         Process p1 = new ProcessBuilder(keytool.toString(), "-genkeypair", "-keyalg", "EC",
                 "-groupname", "secp256r1", "-alias", "server", "-dname", "CN=localhost",
@@ -93,20 +132,6 @@ final class ScriptedMongoServer implements AutoCloseable {
         if (rc2 != 0) {
             throw new IOException("keytool exportcert failed with code " + rc2);
         }
-
-        KeyStore ks = KeyStore.getInstance("PKCS12");
-        try (InputStream in = Files.newInputStream(keystore)) {
-            ks.load(in, "password".toCharArray());
-        }
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(ks, "password".toCharArray());
-        SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-        sslContext.init(kmf.getKeyManagers(), null, null);
-
-        SSLServerSocket socket = (SSLServerSocket) sslContext.getServerSocketFactory()
-                .createServerSocket(0, 5, InetAddress.getLoopbackAddress());
-        socket.setEnabledProtocols(new String[] {"TLSv1.3"});
-        return new ScriptedMongoServer(socket, tempDir, cert, mode, user, serverKey);
     }
 
     static ScriptedMongoServer startWithPassword(Path tempDir, Mode mode, String user,

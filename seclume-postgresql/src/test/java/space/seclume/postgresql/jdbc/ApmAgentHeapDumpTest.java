@@ -107,7 +107,7 @@ class ApmAgentHeapDumpTest {
         Path dump = directory.resolve("apm-agent.hprof");
         String url = "jdbc:seclume:postgresql://" + TestHosts.postgres()
                 + ":" + TestHosts.postgresPort() + "/seclume_test"
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=prefer&user=seclume_test&provider=file&path="
                 + passwordFile.toString().replace('\\', '/');
 
         List<String> jvmArguments = List.of(

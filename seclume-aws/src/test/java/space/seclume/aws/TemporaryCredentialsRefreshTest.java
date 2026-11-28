@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.ValueLayout;
@@ -113,6 +114,31 @@ class TemporaryCredentialsRefreshTest {
         assertNotSame(first, second);
         assertEquals("ASIA2", second.accessKeyId);
         assertEquals(2, source.asked);
+    }
+
+    /**
+     * Two generations' placeholders share nothing but the prefix: they were a
+     * process nonce, a count and an identity hash, so one seen in a log named
+     * the next. Each is random now, 16 bytes of it.
+     */
+    @Test
+    void placeholdersOfTwoGenerationsAreUnrelated() {
+        Source source = source(3600);
+        String first = source.current().placeholder;
+        source.later(3600 - 299);
+        String second = source.current().placeholder;
+        String prefix = TemporaryCredentials.TOKEN_PREFIX;
+        assertTrue(first.startsWith(prefix) && second.startsWith(prefix));
+        String a = first.substring(prefix.length());
+        String b = second.substring(prefix.length());
+        assertEquals(32, a.length(), first);
+        assertEquals(32, b.length(), second);
+        int same = 0;
+        while (same < a.length() && a.charAt(same) == b.charAt(same)) {
+            same++;
+        }
+        assertTrue(same < 8, "the two placeholders begin alike: " + first + ", " + second);
+        assertTrue(!a.contains("-") && !b.contains("-"), "a count is still in it");
     }
 
     @Test

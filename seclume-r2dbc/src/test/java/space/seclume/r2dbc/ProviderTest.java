@@ -41,4 +41,20 @@ class ProviderTest {
         assertFalse(new SeclumeConnectionFactoryProvider().supports(
                 ConnectionFactoryOptions.parse("r2dbc:postgresql://db.example/app")));
     }
+
+    /**
+     * The options option was appended to the JDBC URL as it came, so a
+     * string meant for tuning could set the secret provider, its path or TLS.
+     * Those are refused there; they have options of their own.
+     */
+    @org.junit.jupiter.api.Test
+    void optionsCannotSetWhereTheSecretComesFromOrWhatIsTrusted() {
+        for (String smuggled : new String[] {"provider=process&command=x", "path=/etc/shadow",
+            "tls=off", "tlsRootCert=/tmp/ca.pem", "vault-address=https://evil", "user=postgres"}) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> SeclumeConnectionFactoryProvider.checkedOptions(smuggled), smuggled);
+        }
+        org.junit.jupiter.api.Assertions.assertEquals("fetchSize=500&maxResultRows=10",
+                SeclumeConnectionFactoryProvider.checkedOptions("fetchSize=500&maxResultRows=10"));
+    }
 }

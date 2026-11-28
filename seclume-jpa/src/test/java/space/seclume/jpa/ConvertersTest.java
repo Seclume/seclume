@@ -147,6 +147,37 @@ class ConvertersTest {
         }
     }
 
+    /**
+     * A value written padded - by the same column with padding, which reads
+     * and is read by the one without - comes back at its own length, not at
+     * the length it was padded to.
+     */
+    @Test
+    void aPaddedValueComesBackAtItsOwnLength() {
+        try (FieldKeys keys = ring()) {
+            FieldKeys.install(keys);
+            byte[] scan = {1, 2, 3, 4, 5};
+            byte[] stored = keys.column("patient.scan", Mode.RANDOMIZED,
+                    space.seclume.field.EncryptedColumn.Context.OPTIONAL,
+                    space.seclume.field.EncryptedColumn.Padding.toMultipleOf(64))
+                    .encrypt(MemorySegment.ofArray(scan));
+            assertArrayEquals(scan, new Scan().convertToEntityAttribute(stored));
+        }
+    }
+
+    /** Bytes altered in the database: refused, the converter named. */
+    @Test
+    void alteredBytesAreRefusedWithTheConverterNamed() {
+        try (FieldKeys keys = ring()) {
+            FieldKeys.install(keys);
+            byte[] stored = new Scan().convertToDatabaseColumn(new byte[] {9, 8, 7});
+            stored[stored.length - 1] ^= 1;
+            FieldEncryptionException altered = assertThrows(FieldEncryptionException.class,
+                    () -> new Scan().convertToEntityAttribute(stored));
+            assertTrue(altered.getMessage().contains(Scan.class.getName()), altered.getMessage());
+        }
+    }
+
     @Test
     void aValueOfAnotherColumnOrAlteredIsRefusedWithTheConverterNamed() {
         try (FieldKeys keys = ring()) {

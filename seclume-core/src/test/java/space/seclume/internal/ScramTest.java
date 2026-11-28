@@ -1,5 +1,6 @@
 package space.seclume.internal;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,6 +17,7 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -110,6 +112,59 @@ class ScramTest {
         Mac mac = Mac.getInstance(hash.mac);
         mac.init(new SecretKeySpec(key, hash.mac));
         return mac.doFinal(data);
+    }
+
+    /**
+     * RFC 5802 section 7: c= is the base64 of the GS2 header and, with channel
+     * binding, the binding data - here the certificate hash of this very
+     * connection. Taken apart and compared byte for byte; and "y,," - could
+     * bind, was not offered - comes back as itself.
+     */
+    @Test
+    void theChannelBindingDataAreTheHeaderAndTheCertificateHash() {
+        byte[] fingerprint = new byte[32];
+        for (int i = 0; i < fingerprint.length; i++) {
+            fingerprint[i] = (byte) (i * 7 + 1);
+        }
+        try (Arena arena = Arena.ofConfined();
+             Scram scram = new Scram(HashAlgorithm.SHA_256)) {
+            scram.useChannelBinding(copy(arena, fingerprint), 32);
+            MemorySegment out = arena.allocate(1024);
+            String clientFirst = text(out, scram.clientFirst(out));
+            String header = "p=" + ChannelBinding.TYPE + ",,";
+            assertTrue(clientFirst.startsWith(header + "n=,r="), clientFirst);
+            String nonce = clientFirst.substring(clientFirst.indexOf(",r=") + 3);
+            String serverFirst = "r=" + nonce + "srv,s=" + Base64.getEncoder().encodeToString(SALT)
+                    + ",i=" + ITERATIONS;
+            scram.serverFirst(ascii(arena, serverFirst), 0, serverFirst.length());
+            String clientFinal = text(out, scram.clientFinal(out, ascii(arena, PASSWORD)));
+            String c = clientFinal.substring(2, clientFinal.indexOf(",r="));
+            byte[] decoded = Base64.getDecoder().decode(c);
+            byte[] expected = new byte[header.length() + 32];
+            System.arraycopy(header.getBytes(StandardCharsets.US_ASCII), 0, expected, 0,
+                    header.length());
+            System.arraycopy(fingerprint, 0, expected, header.length(), 32);
+            assertArrayEquals(expected, decoded);
+        }
+        try (Arena arena = Arena.ofConfined();
+             Scram scram = new Scram(HashAlgorithm.SHA_256)) {
+            scram.channelBindingNotOffered();
+            MemorySegment out = arena.allocate(1024);
+            String clientFirst = text(out, scram.clientFirst(out));
+            String nonce = clientFirst.substring(clientFirst.indexOf(",r=") + 3);
+            String serverFirst = "r=" + nonce + "srv,s=" + Base64.getEncoder().encodeToString(SALT)
+                    + ",i=" + ITERATIONS;
+            scram.serverFirst(ascii(arena, serverFirst), 0, serverFirst.length());
+            String clientFinal = text(out, scram.clientFinal(out, ascii(arena, PASSWORD)));
+            assertTrue(clientFinal.startsWith("c=" + Base64.getEncoder().encodeToString(
+                    "y,,".getBytes(StandardCharsets.US_ASCII)) + ",r="), clientFinal);
+        }
+    }
+
+    private static MemorySegment copy(Arena arena, byte[] bytes) {
+        MemorySegment segment = arena.allocate(bytes.length);
+        MemorySegment.copy(bytes, 0, segment, ValueLayout.JAVA_BYTE, 0, bytes.length);
+        return segment;
     }
 
     private static MemorySegment ascii(Arena arena, String text) {

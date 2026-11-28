@@ -70,6 +70,8 @@ public final class Deadline implements AutoCloseable {
     }
 
     private final ScheduledFuture<?> timer;
+    /** Closes the connection when the cancellation did not end it; null without. */
+    private volatile ScheduledFuture<?> killer;
     private final AtomicBoolean expired;
 
     private Deadline() {
@@ -89,6 +91,18 @@ public final class Deadline implements AutoCloseable {
      * @param stop    the driver's cancellation, run on the scheduler thread
      */
     public static Deadline of(int seconds, Stop stop) {
+        return of(seconds, stop, null);
+    }
+
+    /**
+     * The same, and {@code kill} - closing the connection - when the
+     * cancellation did not end the statement within a grace of its own
+     * ({@code seclume.queryTimeoutGraceSeconds}, the timeout itself, 2 to 30 s).
+     * A server that ignores the cancellation and keeps sending a byte now and
+     * then defeats a network timeout, which counts only silence; without this
+     * the statement waited for as long as the server liked.
+     */
+    public static Deadline of(int seconds, Stop stop, Stop kill) {
         if (seconds <= 0) {
             return NONE;
         }
@@ -98,16 +112,43 @@ public final class Deadline implements AutoCloseable {
             // cancellation being sent and its effect arriving, and it has to
             // find out that a deadline is why.
             expired.set(true);
-            try {
-                stop.now();
-            } catch (Exception beyondReach) {
-                // A cancellation that cannot be sent leaves the statement
-                // running, and the caller finds out when it finally answers.
-                // Nothing useful can be thrown from here - there is no caller
-                // on this thread.
-            }
+            // On a thread of its own: MySQL's cancellation is a login and a
+            // KILL, and against a busy server that login took up to the
+            // connect timeout - on the one scheduler thread, where every other
+            // deadline and every kill of the process waited behind it.
+            Thread.ofVirtual().name("seclume-cancel").start(() -> {
+                try {
+                    stop.now();
+                } catch (Exception beyondReach) {
+                    // A cancellation that cannot be sent leaves the statement
+                    // running; the kill after the grace is what is left.
+                }
+            });
         }, seconds, TimeUnit.SECONDS);
-        return new Deadline(timer, expired);
+        Deadline deadline = new Deadline(timer, expired);
+        if (kill != null) {
+            long grace = Long.getLong("seclume.queryTimeoutGraceSeconds",
+                    Math.max(2, Math.min(30, seconds)));
+            deadline.killer = Scheduler.SERVICE.schedule(() -> Thread.ofVirtual() // mutation-equivalent: the scheduled callable's result is never read
+                    .name("seclume-kill").start(() -> {
+                // Under the deadline's lock, and only while it is open: once
+                // close() has returned the statement is over and its
+                // connection may already be someone else's. Off the scheduler
+                // thread, like the cancellation: a close that blocks must not
+                // hold up the next deadline.
+                synchronized (deadline) {
+                    if (deadline.finished) {
+                        return;
+                    }
+                    try {
+                        kill.now();
+                    } catch (Exception ignored) {
+                        // closing is all there is left to try
+                    }
+                }
+            }), seconds + grace, TimeUnit.SECONDS);
+        }
+        return deadline;
     }
 
     /** Whether the time ran out before the answer arrived. */
@@ -163,11 +204,23 @@ public final class Deadline implements AutoCloseable {
         }
     }
 
+    /** Set by close(), under this object's lock: the kill stage then does nothing. */
+    private boolean finished;
+
     /** Stops the clock. Harmless twice, and harmless after it has fired. */
     @Override
     public void close() {
+        if (killer != null) {
+            synchronized (this) {
+                finished = true;
+            }
+        }
         if (timer != null) {
             timer.cancel(false);
+        }
+        ScheduledFuture<?> k = killer;
+        if (k != null) {
+            k.cancel(false);
         }
     }
 }

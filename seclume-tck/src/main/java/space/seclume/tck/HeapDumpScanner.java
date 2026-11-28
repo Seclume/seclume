@@ -54,10 +54,7 @@ public final class HeapDumpScanner {
      * Flight Recorder recording, say, which has no heap to walk.
      */
     public static List<Finding> scanRawBytes(Path file, byte[] secret) throws IOException {
-        Map<String, byte[]> needles = new LinkedHashMap<>();
-        needles.put("bytes", secret);
-        needles.put("Base64", Base64.getEncoder().encode(secret)); // seclume-allow: the searcher builds the pattern it hunts for
-        return raw(file, needles);
+        return raw(file, SecretEncodings.ofBytes(secret));
     }
 
     /**
@@ -65,9 +62,7 @@ public final class HeapDumpScanner {
      * raw key - as it is and in base64; an empty list means it is not in the dump.
      */
     public static List<Finding> scanBytes(Path dump, byte[] secret) throws IOException {
-        Map<String, byte[]> needles = new LinkedHashMap<>();
-        needles.put("bytes", secret);
-        needles.put("Base64", Base64.getEncoder().encode(secret)); // seclume-allow: the searcher builds the pattern it hunts for
+        Map<String, byte[]> needles = SecretEncodings.ofBytes(secret);
         List<Finding> findings = new ArrayList<>(raw(dump, needles));
         HprofParser.forEachPrimitiveArray(dump, (objectId, type, data) -> {
             if (findings.size() <= 50 && type == HprofParser.PrimitiveType.BYTE) {
@@ -116,23 +111,18 @@ public final class HeapDumpScanner {
     public static List<Finding> scanStructured(Path dump, String secret) throws IOException {
         List<Finding> findings = new ArrayList<>();
         Map<String, byte[]> needles = needles(secret);
-        byte[] utf8 = needles.get("UTF-8");
         byte[] utf16be = needles.get("UTF-16BE");
-        byte[] base64 = needles.get("Base64");
-        byte[] latin1 = needles.get("ISO-8859-1");
 
         HprofParser.forEachPrimitiveArray(dump, (objectId, type, data) -> {
             if (findings.size() > 50) {
                 return;
             }
             switch (type) {
-                case BYTE -> {
-                    check(findings, data, utf8, "byte[] " + objectId, "UTF-8");
-                    check(findings, data, base64, "byte[] " + objectId, "Base64");
-                    if (latin1 != null) {
-                        check(findings, data, latin1, "byte[] " + objectId, "ISO-8859-1");
+                case BYTE -> needles.forEach((encoding, needle) -> {
+                    if (!encoding.startsWith("UTF-16")) {
+                        check(findings, data, needle, "byte[] " + objectId, encoding);
                     }
-                }
+                });
                 case CHAR -> check(findings, data, utf16be, "char[] " + objectId,
                         "UTF-16BE");
                 default -> {
@@ -161,22 +151,7 @@ public final class HeapDumpScanner {
      * process, and its heap is what the dump is of.
      */
     private static Map<String, byte[]> needles(String secret) {
-        Map<String, byte[]> needles = new LinkedHashMap<>();
-        // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
-        needles.put("UTF-8", secret.getBytes(StandardCharsets.UTF_8));
-        // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
-        needles.put("UTF-16BE", secret.getBytes(StandardCharsets.UTF_16BE));
-        // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
-        needles.put("UTF-16LE", secret.getBytes(StandardCharsets.UTF_16LE));
-        if (secret.chars().allMatch(c -> c <= 0xff) && secret.chars().anyMatch(c -> c > 0x7f)) {
-            // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
-            needles.put("ISO-8859-1", secret.getBytes(StandardCharsets.ISO_8859_1));
-        }
-        // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
-        needles.put("Base64", Base64.getEncoder()
-                .encodeToString(secret.getBytes(StandardCharsets.UTF_8)) // seclume-allow: the searcher builds the pattern it hunts for
-                .getBytes(StandardCharsets.US_ASCII)); // seclume-allow: the searcher builds the pattern it hunts for
-        return needles;
+        return SecretEncodings.ofText(secret);
     }
 
     /** Naive search jumping on the first byte - fast enough for a few needles. */

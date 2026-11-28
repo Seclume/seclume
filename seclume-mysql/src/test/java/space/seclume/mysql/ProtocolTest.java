@@ -54,7 +54,9 @@ class ProtocolTest {
     }
 
     private static MySession.Settings settings(FakeMySqlServer server) {
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret());
+        // The stand-in logs in with mysql_native_password, without TLS.
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)
+                .allowingLegacyHash();
     }
 
     @Test
@@ -223,8 +225,10 @@ class ProtocolTest {
                 session.ping();
             }
             server.rethrowFailure();
-            assertEquals(List.of("<reset>", "select 'next borrower'", "<reset>"),
-                    server.received());
+            // Behind each reset, in the same write, the login's roles put back:
+            // COM_RESET_CONNECTION leaves the active roles as they were.
+            assertEquals(List.of("<reset>", "SET ROLE DEFAULT", "select 'next borrower'",
+                    "<reset>", "SET ROLE DEFAULT"), server.received());
         }
     }
 
@@ -246,8 +250,8 @@ class ProtocolTest {
                 session.ping();
             }
             server.rethrowFailure();
-            assertEquals(List.of("select ?", "<reset>", "select ?", "<reset>", "select ?"),
-                    server.received());
+            assertEquals(List.of("select ?", "<reset>", "SET ROLE DEFAULT", "select ?", "<reset>",
+                    "SET ROLE DEFAULT", "select ?"), server.received());
         }
     }
 
@@ -269,11 +273,46 @@ class ProtocolTest {
                 org.junit.jupiter.api.Assertions.assertFalse(session.isOpen(),
                         "a session whose reset failed stays usable");
             }
-            assertEquals(List.of("<reset>"), server.received());
+            // Nothing of the next borrower's: the roles' line was written with
+            // the reset, before anybody could have asked for anything.
+            assertEquals(List.of("<reset>", "SET ROLE DEFAULT"), server.received());
         }
     }
 
     // ---- through the JDBC surface ----------------------------------------
+
+    /**
+     * A catalog pattern beyond ASCII goes into the catalog query as
+     * {@code _utf8mb4 X'...'} - its bytes as hex, whatever the connection's
+     * character set would make of the text - with the JDBC wildcard kept.
+     */
+    @Test
+    void aPatternBeyondAsciiGoesAsHex() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.answerWith(List.of(new Column("TABLE_CAT", MyTypes.VAR_STRING, 0, 80)),
+                    List.of());
+            server.start();
+            space.seclume.mysql.jdbc.MyDataSource dataSource =
+                    new space.seclume.mysql.jdbc.MyDataSource();
+            dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
+            dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
+            dataSource.setDatabase("testdb");
+            dataSource.setUser(USER);
+            dataSource.setSecretProvider(secret());
+            try (Connection connection = dataSource.getConnection();
+                 ResultSet tables = connection.getMetaData().getTables(null, null, "中%",
+                         null)) {
+                assertFalse(tables.next());
+            }
+            String query = server.received().stream().filter(sql -> sql.contains("table_name"))
+                    .findFirst().orElseThrow(() -> new AssertionError(server.received().toString()));
+            assertTrue(query.toLowerCase(java.util.Locale.ROOT).contains("_utf8mb4 x'e4b8ad25'"),
+                    query);
+            assertFalse(query.contains("中"), "the pattern went as text: " + query);
+        }
+    }
 
     @Test
     void theDriverManagerSpeaksToTheServer() throws Exception {
@@ -292,7 +331,9 @@ class ProtocolTest {
             space.seclume.mysql.jdbc.MyDataSource dataSource =
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
             dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
             dataSource.setUser(USER);
             dataSource.setSecretProvider(secret());
@@ -329,7 +370,9 @@ class ProtocolTest {
             space.seclume.mysql.jdbc.MyDataSource dataSource =
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
             dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
             dataSource.setUser(USER);
             dataSource.setSecretProvider(secret());
@@ -356,7 +399,7 @@ class ProtocolTest {
     void aPasswordInTheUrlIsRefused() {
         SQLException failure = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(
-                        "jdbc:seclume:mysql://127.0.0.1:3306/db?user=x&password=geheim"));
+                        "jdbc:seclume:mysql://127.0.0.1:3306/db?tls=prefer&user=x&password=geheim"));
         assertTrue(failure.getMessage().contains("not a seclume setting"),
                 "expected the refusal to explain itself, got: " + failure.getMessage());
     }
@@ -369,5 +412,25 @@ class ProtocolTest {
         assertFalse(driver.acceptsURL("jdbc:mysql://localhost/db"));
         assertFalse(driver.acceptsURL("jdbc:seclume:postgresql://localhost/db"));
         assertNull(driver.connect("jdbc:mysql://localhost/db", null));
+    }
+
+    /**
+     * A server that repeats the password in its refusal: the password would
+     * be in the exception's message, on the heap and in every log. It is
+     * masked before the message is text; the codes stay.
+     */
+    @Test
+    void anEchoedPasswordNeverBecomesText() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.rejectLoginEchoingThePassword().start();
+            java.sql.SQLException refused = assertThrows(java.sql.SQLException.class,
+                    () -> MySession.open(settings(server)).close());
+            java.io.StringWriter all = new java.io.StringWriter();
+            refused.printStackTrace(new java.io.PrintWriter(all));
+            org.junit.jupiter.api.Assertions.assertFalse(all.toString().contains(PASSWORD)
+                    || all.toString().contains("Testpasswort"),
+                    "the echoed password is in the exception: " + refused.getMessage());
+            assertEquals("28000", refused.getSQLState());
+        }
     }
 }

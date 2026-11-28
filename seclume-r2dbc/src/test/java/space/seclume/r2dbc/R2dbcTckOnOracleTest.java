@@ -46,10 +46,10 @@ class R2dbcTckOnOracleTest implements TestKit<String> {
         }
         String path = password.toString().replace('\\', '/');
         factory = ConnectionFactories.get("r2dbc:seclume:oracle://seclume_test@" + HOST + ":"
-                + PORT + "/FREEPDB1?provider=file&path=" + path);
+                + PORT + "/FREEPDB1?tls=off&provider=file&path=" + path);
         jdbc = new JdbcTemplate(new SimpleDriverDataSource(
                 new space.seclume.oracle.jdbc.OraDriver(),
-                "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/FREEPDB1?user=seclume_test"
+                "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/FREEPDB1?tls=off&user=seclume_test"
                         + "&provider=file&path=" + path));
     }
 

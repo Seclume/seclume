@@ -100,6 +100,25 @@ class PitReportTest(unittest.TestCase):
             self.assertEqual(1, main(f"{first},/nonexistent/mutations.xml", "src", "tls"))
         self.assertIn("no PIT report at /nonexistent/mutations.xml", output.getvalue())
 
+    def test_a_survivor_on_a_changed_line_fails_unless_the_line_says_why(self):
+        root = Path(tempfile.mkdtemp())
+        source = root / "space" / "seclume" / "tls" / "A.java"
+        source.parent.mkdir(parents=True)
+        source.write_text("class A {\n  if (a) x();\n  if (b) y(); // mutation-equivalent: y is idempotent\n"
+                          "  if (c) z();\n}\n", encoding="utf-8")
+        path = report(mutation("KILLED", "space.seclume.tls.A", 2),
+                      mutation("SURVIVED", "space.seclume.tls.A", 3),
+                      mutation("SURVIVED", "space.seclume.tls.A", 4))
+        changed = root / "changed.txt"
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            changed.write_text(f"{source.as_posix()}:2\n{source.as_posix()}:3\n", encoding="utf-8")
+            self.assertEqual(0, main(str(path), root.as_posix(), "tls", None, str(changed)),
+                             "the survivor of a changed line said why, the other is on an old line")
+            changed.write_text(f"{source.as_posix()}:4\n", encoding="utf-8")
+            self.assertEqual(1, main(str(path), root.as_posix(), "tls", None, str(changed)))
+        self.assertIn("on a changed line", printed.getvalue())
+
     def test_a_floor_fails_a_score_below_it_and_only_then(self):
         path = report(mutation("KILLED", "space.seclume.tls.A", 1),
                       mutation("KILLED", "space.seclume.tls.A", 2),

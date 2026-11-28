@@ -1,3 +1,15 @@
+# Text is checked out with LF everywhere, Windows too. A release is built on
+# Windows and rebuilt from its tag on Linux (reproducible.yml); with Git's
+# core.autocrlf=true the LICENSE, the license texts and the bundled pom.xml
+# went into the jars with CRLF, and no jar of 0.14.0 matched its rebuild.
+# Checked out with LF, the two builds are byte for byte the same.
+* text=auto eol=lf
+
+# Windows scripts keep CRLF, which cmd.exe and PowerShell expect.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
 # Preserve the exact upstream bytes of the bundled, separately licensed PSL data.
 seclume-core/src/main/resources/space/seclume/tls/public_suffix_list.dat -text
 seclume-core/src/main/resources/space/seclume/tls/public-suffix-LICENSE.txt -text -whitespace

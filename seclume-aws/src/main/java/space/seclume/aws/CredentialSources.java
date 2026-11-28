@@ -51,16 +51,35 @@ final class CredentialSources {
         return switch (kind) {
             case "instance" -> new Instance();
             case "container" -> new Container(option(options, "container-uri",
-                    "AWS_CONTAINER_CREDENTIALS_FULL_URI"), option(options, "container-token-file",
-                    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"));
+                    "AWS_CONTAINER_CREDENTIALS_FULL_URI"), tokenFile(options,
+                    "container-token-file", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"));
             case "web-identity" -> new WebIdentity(option(options, "role-arn", "AWS_ROLE_ARN"),
-                    option(options, "web-identity-token-file", "AWS_WEB_IDENTITY_TOKEN_FILE"),
+                    tokenFile(options, "web-identity-token-file", "AWS_WEB_IDENTITY_TOKEN_FILE"),
                     options.getOrDefault("role-session-name", "seclume"),
                     options.getOrDefault("sts-endpoint", region == null ? "sts.amazonaws.com"
                             : "sts." + region + ".amazonaws.com"), trust);
             default -> throw new IllegalArgumentException("credentials= is static, instance, "
                     + "container or web-identity, not '" + kind + "'");
         };
+    }
+
+    /**
+     * The token file's provider. Named in the URL, it is a file the URL's
+     * writer chose, and goes through the same check as provider=file - the
+     * JVM has to allow it. From the environment - ECS and EKS set the
+     * variable - it is the platform's, and is read as such.
+     */
+    private static java.util.function.Supplier<SecretProvider> tokenFile(
+            Map<String, String> options, String name, String variable) {
+        String path = option(options, name, variable);
+        if (options.containsKey(name)) {
+            SecretProviders.of(Map.of("provider", "file", "path", path,
+                    "max-length", "16384")).close();          // refused here, not at the first fetch
+            return () -> SecretProviders.of(Map.of("provider", "file", "path", path,
+                    "max-length", "16384"));
+        }
+        java.nio.file.Path file = java.nio.file.Path.of(path);
+        return () -> new space.seclume.secret.FileSecretProvider(file, 16_384);
     }
 
     /** An option, or the environment variable AWS's own SDKs read - a name or a path, never a secret. */
@@ -97,9 +116,9 @@ final class CredentialSources {
     static final class Container extends TemporaryCredentials {
 
         private final URI uri;
-        private final String tokenFile;
+        private final java.util.function.Supplier<SecretProvider> tokenFile;
 
-        Container(String uri, String tokenFile) {
+        Container(String uri, java.util.function.Supplier<SecretProvider> tokenFile) {
             this.uri = URI.create(uri);
             this.tokenFile = tokenFile;
         }
@@ -107,8 +126,7 @@ final class CredentialSources {
         @Override
         Fetched fetch() {
             try (Arena arena = Arena.ofConfined();
-                 SecretProvider file = SecretProviders.of(Map.of("provider", "file",
-                         "path", tokenFile));
+                 SecretProvider file = tokenFile.get();
                  SecretScope token = SecretScope.fromProvider(file);
                  SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
                 SecretFetch.Response response = SecretFetch.sendLinkLocal(uri.getHost(),
@@ -138,13 +156,14 @@ final class CredentialSources {
     static final class WebIdentity extends TemporaryCredentials {
 
         private final String roleArn;
-        private final String tokenFile;
+        private final java.util.function.Supplier<SecretProvider> tokenFile;
         private final String sessionName;
         private final String host;
         private final int port;
         private final TrustChoice.Choice trust;
 
-        WebIdentity(String roleArn, String tokenFile, String sessionName, String endpoint,
+        WebIdentity(String roleArn, java.util.function.Supplier<SecretProvider> tokenFile,
+                    String sessionName, String endpoint,
                     TrustChoice.Choice trust) {
             this.roleArn = roleArn;
             this.tokenFile = tokenFile;
@@ -161,8 +180,7 @@ final class CredentialSources {
                     + "&RoleArn=" + AwsSigV4.urlEncode(roleArn) + "&RoleSessionName="
                     + AwsSigV4.urlEncode(sessionName) + "&WebIdentityToken=";
             try (Arena arena = Arena.ofConfined();
-                 SecretProvider file = SecretProviders.of(Map.of("provider", "file",
-                         "path", tokenFile, "max-length", "16384"));
+                 SecretProvider file = tokenFile.get();
                  SecretScope token = SecretScope.fromProvider(file);
                  SecretScope body = SecretScope.in(arena, form.length() + 3 * token.length());
                  SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {

@@ -45,6 +45,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
     private boolean allowPublicKeyRetrieval;
     private java.util.Set<String> disabledAuthenticationPlugins = java.util.Set.of();
     private boolean allowCleartextOverUnverifiedTls = MySession.Settings.cleartextByDefault();
+    private boolean allowLegacyHashOverUnverifiedTls = MySession.Settings.legacyHashByDefault();
     private SecretProvider secret;
     private space.seclume.tls.ClientIdentity identity;
     private PrintWriter logWriter;
@@ -136,6 +137,20 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
 
     public boolean isAllowCleartextOverUnverifiedTls() {
         return allowCleartextOverUnverifiedTls;
+    }
+
+    /**
+     * Answers mysql_native_password over a connection that did not check the
+     * server's certificate. Off: its answer is a fast hash of the password a
+     * server in the middle can guess against; it goes only to a server that
+     * proved who it is (tls=verify-full or tlsPin).
+     */
+    public void setAllowLegacyHashOverUnverifiedTls(boolean allow) {
+        this.allowLegacyHashOverUnverifiedTls = allow;
+    }
+
+    public boolean isAllowLegacyHashOverUnverifiedTls() {
+        return allowLegacyHashOverUnverifiedTls;
     }
 
     /**
@@ -244,6 +259,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
         this.allowPublicKeyRetrieval = settings.allowPublicKeyRetrieval();
         this.disabledAuthenticationPlugins = settings.disabledAuthenticationPlugins();
         this.allowCleartextOverUnverifiedTls = settings.allowCleartextOverUnverifiedTls();
+        this.allowLegacyHashOverUnverifiedTls = settings.allowLegacyHashOverUnverifiedTls();
         this.tls = settings.tls();
     }
 
@@ -254,7 +270,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
      * are two different promises: only {@code verify-full} checks who is at the
      * other end. See {@link TlsMode}.
      */
-    private TlsMode tls = TlsMode.PREFER;
+    private TlsMode tls = TlsMode.VERIFY_FULL;
 
     public void setTls(String mode) throws SQLException {
         this.tls = TlsMode.of(mode);
@@ -297,7 +313,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
                 resolvedIdentity(), true, disabledAuthenticationPlugins,
-                allowCleartextOverUnverifiedTls);
+                allowCleartextOverUnverifiedTls, allowLegacyHashOverUnverifiedTls);
         return new MyConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> MySession.allowingLocalData(loadDataLocal,

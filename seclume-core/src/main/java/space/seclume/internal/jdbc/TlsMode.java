@@ -48,11 +48,32 @@ public enum TlsMode {
         return this == REQUIRE || this == VERIFY_FULL;
     }
 
-    /** Parses the value of a URL option or a property. */
+    /**
+     * Parses the value of a URL option or a property. Not given, it is
+     * {@link #VERIFY_FULL}: a connection checks the server's certificate and
+     * name unless the URL says otherwise - a weaker mode is a choice written
+     * down, and named among the weakened settings.
+     */
     public static TlsMode of(String value) throws SQLException {
         if (value == null || value.isEmpty()) {
-            return PREFER;
+            return VERIFY_FULL;
         }
+        TlsMode mode = parse(value);
+        if (mode != VERIFY_FULL && WEAKENED_SAID.add(mode)) {
+            // Without Spring nothing else names it: once per mode and process.
+            System.getLogger("space.seclume").log(System.Logger.Level.WARNING,
+                    "seclume: a connection URL says tls=" + value + " - "
+                            + (mode == OFF ? "no encryption" : "the server's certificate is not "
+                            + "checked, so whoever stands in the middle is taken for the "
+                            + "database") + "; verify-full is the default");
+        }
+        return mode;
+    }
+
+    private static final java.util.Set<TlsMode> WEAKENED_SAID =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static TlsMode parse(String value) throws SQLException {
         return switch (value.toLowerCase(Locale.ROOT).replace('_', '-')) {
             case "off", "false", "disable", "disabled" -> OFF;
             case "prefer", "true", "allow" -> PREFER;

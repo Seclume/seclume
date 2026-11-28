@@ -315,9 +315,57 @@ final class HttpFraming {
         }
     }
 
+    /**
+     * The header lines a credential is written into. Any other line - a
+     * correlation id, a referer, a cookie the application filled from what a
+     * user typed - goes as it is, placeholder and all.
+     */
+    static final java.util.Set<String> CREDENTIAL_HEADERS = java.util.Set.of(
+            "authorization", "proxy-authorization", "x-api-key", "api-key", "x-auth-token");
+
+    /** Further header names a credential may go into, comma separated: {@code x-vault-token}. */
+    static final String EXTRA_HEADERS = "seclume.http.credential-headers";
+
+    /**
+     * Whether a credential is written into the header {@code name} - one of
+     * {@link #CREDENTIAL_HEADERS}, or one {@code seclume.http.credential-headers}
+     * names. Named, never guessed: a service that wants its token in a header
+     * of its own is said so, and every other header keeps its placeholder.
+     */
+    static boolean isCredentialHeader(String name) {
+        String lower = name.trim().toLowerCase(Locale.ROOT);
+        if (CREDENTIAL_HEADERS.contains(lower)) {
+            return true;
+        }
+        String extra = System.getProperty(EXTRA_HEADERS);
+        if (extra == null) {
+            return false;
+        }
+        for (String named : extra.split(",")) {
+            if (!named.isBlank() && named.trim().toLowerCase(Locale.ROOT).equals(lower)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean credentialHeader(byte[] bytes, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (bytes[i] == ':') {
+                return isCredentialHeader(new String(bytes, from, i - from, // seclume-allow: a header's name
+                        StandardCharsets.ISO_8859_1));
+            }
+        }
+        return false;
+    }
+
     /** One header line, secrets written in, into {@code out}. */
     private static void rewriteLine(byte[] bytes, int from, int to, Room out, String server)
             throws IOException {
+        if (!credentialHeader(bytes, from, to)) {
+            out.put(bytes, from, to - from);
+            return;
+        }
         int basic = basicValue(bytes, from, to);
         if (basic >= 0) {
             int valueEnd = to;
@@ -426,7 +474,7 @@ final class HttpFraming {
             throws IOException {
         // seclume-allow: the placeholder - no secret
         String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        return CredentialPlaceholders.provider(placeholder, server);
+        return CredentialPlaceholders.provider(placeholder, server, "http");
     }
 
     /** A length the client wrote - not one, and the framing cannot be followed. */

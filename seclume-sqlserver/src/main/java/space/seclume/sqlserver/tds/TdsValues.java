@@ -57,10 +57,40 @@ public final class TdsValues {
                 case 4 -> (int) unsigned(in, at, 4);
                 default -> unsigned(in, at, 8);
             };
-            case TdsTypes.FLT4, TdsTypes.FLT8, TdsTypes.FLTN ->
-                    (long) asDouble(in, type, at, length);
-            default -> Long.parseLong(asText(in, type, at, length, 0).trim());
+            case TdsTypes.FLT4, TdsTypes.FLT8, TdsTypes.FLTN -> {
+                double value = asDouble(in, type, at, length);
+                // A cast saturates: 1e30 became Long.MAX_VALUE, a wrong number
+                // that looks like one. Out of range is said as such.
+                if (Double.isNaN(value) || value >= 0x1p63 || value < -0x1p63) {
+                    throw new ArithmeticException("out of range for a long");
+                }
+                yield (long) value;
+            }
+            default -> wholeNumber(asText(in, type, at, length, 0).trim());
         };
+    }
+
+    /**
+     * Text as a long: digits as they are; a whole number too large for a long
+     * - a DECIMAL(30) holding 2^64 + 5 - is out of range
+     * ({@link ArithmeticException}), not "not a number"; anything else, a
+     * fraction among it, stays a {@link NumberFormatException}.
+     */
+    static long wholeNumber(String text) {
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException notPlain) {
+            java.math.BigDecimal number;
+            try {
+                number = new java.math.BigDecimal(text);
+            } catch (NumberFormatException notANumber) {
+                throw notPlain;
+            }
+            if (number.signum() != 0 && number.stripTrailingZeros().scale() > 0) {
+                throw notPlain;                // as before: 12.5 is no long
+            }
+            return number.longValueExact();    // whole: ArithmeticException means out of range
+        }
     }
 
     /**
@@ -276,6 +306,12 @@ public final class TdsValues {
         }
         int base = in.getByte(at) & 0xff;
         int properties = in.getByte(at + 1) & 0xff;
+        // MS-TDS 2.2.5.5.4: a sql_variant never holds another one. Taken as it
+        // came, each nesting cost two bytes and one recursion here - an 8016-byte
+        // value was a StackOverflowError on a 1 MiB thread stack.
+        if (base == TdsTypes.SQLVARIANT) {
+            throw WireBuffer.malformed("a sql_variant that holds a sql_variant");
+        }
         // The property count is the server's, up to 255, and what is left for
         // the value is the length minus it: a count larger than the value made
         // the value's length negative, and that went to an array allocation as

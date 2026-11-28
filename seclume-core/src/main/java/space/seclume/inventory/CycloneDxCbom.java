@@ -304,7 +304,7 @@ public final class CycloneDxCbom {
         }
         String suiteName = asset.facts().get("cipherSuite");
         String properties = "\"type\": \"tls\", \"version\": "
-                + string(asset.facts().get("version"))
+                + string(asset.facts().getOrDefault("version", "unknown"))
                 + ", \"cipherSuites\": [{\"name\": " + string(suiteName == null ? "" : suiteName)
                 + ", \"algorithms\": [" + String.join(", ", refs) + "]}]";
         return component(asset, "protocol", "\"protocolProperties\": {" + properties + "}");

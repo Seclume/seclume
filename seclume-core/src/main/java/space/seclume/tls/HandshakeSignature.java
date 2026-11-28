@@ -77,7 +77,8 @@ public final class HandshakeSignature {
         byte[] content = content(true, transcriptHash);
         try {
             Signature verifier = verifierFor(signatureScheme);
-            if (verifier == null || !keyFits(leafKey, signatureScheme)) {
+            if (verifier == null || !keyFits(leafKey, signatureScheme)
+                    || !curveFits(leafKey, signatureScheme)) {
                 return false;
             }
             verifier.initVerify(leafKey);
@@ -177,6 +178,27 @@ public final class HandshakeSignature {
                     "RSASSA-PSS".equals(key.getAlgorithm());
             default -> true;
         };
+    }
+
+    /**
+     * In TLS 1.3 an ECDSA scheme names its curve as well as its hash (RFC 8446
+     * section 4.2.3): {@code ecdsa_secp256r1_sha256} is P-256 and nothing else.
+     * A P-384 key signing under the P-256 scheme is a server that does not keep
+     * to what it offered. TLS 1.2's same code points name only the hash, so the
+     * 1.2 path does not ask this.
+     */
+    static boolean curveFits(PublicKey key, int scheme) {
+        int bits = switch (scheme) {
+            case ECDSA_SECP256R1_SHA256 -> 256;
+            case ECDSA_SECP384R1_SHA384 -> 384;
+            case ECDSA_SECP521R1_SHA512 -> 521;
+            default -> 0;
+        };
+        if (bits == 0) {
+            return true;
+        }
+        return key instanceof java.security.interfaces.ECPublicKey ec
+                && ec.getParams().getCurve().getField().getFieldSize() == bits;
     }
 
     private static Signature pss(String digest, MGF1ParameterSpec mgf1, int saltLength)

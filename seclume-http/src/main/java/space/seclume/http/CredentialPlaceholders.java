@@ -1,7 +1,6 @@
 package space.seclume.http;
 
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.HexFormat; // seclume-allow: a random nonce for placeholders - public
 import java.util.Locale;
@@ -34,7 +33,6 @@ import space.seclume.secret.SecretProvider;
 final class CredentialPlaceholders {
 
     static final String PREFIX = "seclume-cred-";
-    private static final SecureRandom RANDOM = new SecureRandom();
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce - public
     private static final AtomicLong NEXT = new AtomicLong();
     private static final Map<String, Registration> PROVIDERS = new ConcurrentHashMap<>();
@@ -56,6 +54,18 @@ final class CredentialPlaceholders {
         }
     }
 
+    /** Placeholders seen that this process did not hand out. */
+    private static final java.util.concurrent.atomic.AtomicLong UNKNOWN =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** How many placeholders this process did not hand out were refused - for metrics. */
+    static long unknownSeen() {
+        return UNKNOWN.get();
+    }
+
+    /** Every this many registrations the growth is said. */
+    static final int WARN_EVERY = 10_000;
+
     private CredentialPlaceholders() {
     }
 
@@ -73,10 +83,60 @@ final class CredentialPlaceholders {
         for (String server : servers) {
             normal.add(normalize(server));
         }
-        String placeholder = PREFIX + NONCE + "-" + NEXT.incrementAndGet();
+        // Random each, not a shared nonce and a count: one placeholder seen in
+        // a log must not name every other one.
+        String placeholder;
+        do {
+            placeholder = PREFIX + HexFormat.of().formatHex(nonce16()); // seclume-allow: random, public
+        } while (PROVIDERS.containsKey(placeholder));
         PROVIDERS.put(placeholder, new Registration(provider, Set.copyOf(normal),
                 new AtomicReference<>()));
+        int registered = PROVIDERS.size();
+        if (registered % WARN_EVERY == 0) {
+            // A placeholder is never taken back - it may still be in a
+            // client's hands as bytes. One made per call (a credentials
+            // object per request, a header per call) grows this for ever.
+            System.getLogger(CredentialPlaceholders.class.getName()).log(
+                    System.Logger.Level.WARNING, "seclume: " + registered + " credential "
+                    + "placeholders registered - is one made per request? Make it once and "
+                    + "keep it.");
+        }
         return placeholder;
+    }
+
+    /**
+     * Takes {@code placeholder} back: from now on it is one this process did
+     * not hand out - a request still carrying it is refused - and its
+     * provider is closed.
+     *
+     * @return whether it was one of ours
+     */
+    static boolean forget(String placeholder) {
+        Registration gone = placeholder == null ? null : PROVIDERS.remove(placeholder);
+        if (gone == null) {
+            return false;
+        }
+        try {
+            gone.provider().close();
+        } catch (RuntimeException closing) {
+            // taken back all the same; the provider's own trouble
+        }
+        return true;
+    }
+
+    /** How many placeholders are registered - for a test of forget. */
+    static int registered() {
+        return PROVIDERS.size();
+    }
+
+    /** A placeholder nobody here handed out: the request it was in goes no further. */
+    static final class PlaceholderRefused extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        PlaceholderRefused(String message) {
+            super(message);
+        }
     }
 
     /**
@@ -86,10 +146,22 @@ final class CredentialPlaceholders {
      *
      * @throws IOException for a placeholder this process did not hand out
      */
-    static SecretProvider provider(String placeholder, String server) throws IOException {
+    static SecretProvider provider(String placeholder, String server, String kind)
+            throws IOException {
         Registration registration = PROVIDERS.get(placeholder);
         if (registration == null) {
-            throw new IOException("a credential placeholder this process did not hand out");
+            // Not a typo: a placeholder nobody here made is someone guessing
+            // at, or replaying, what this process substitutes. Counted and
+            // said, not only refused.
+            long seen = UNKNOWN.incrementAndGet();
+            if (Long.bitCount(seen) == 1) {                 // 1, 2, 4, 8 ... - said, not flooded
+                System.getLogger(CredentialPlaceholders.class.getName()).log(
+                        System.Logger.Level.WARNING, "seclume: a request to " + server
+                        + " carried a credential placeholder this process did not hand out ("
+                        + seen + " so far) - refused");
+            }
+            space.seclume.jfr.Observed.placeholderRefused(kind, server, seen);
+            throw new PlaceholderRefused("a credential placeholder this process did not hand out");
         }
         return registration.goesTo(normalize(server)) ? registration.provider() : null;
     }
@@ -119,9 +191,15 @@ final class CredentialPlaceholders {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-';
     }
 
+    private static byte[] nonce16() {
+        byte[] bytes = new byte[16];
+        space.seclume.internal.Entropy.fill(bytes);
+        return bytes;
+    }
+
     private static byte[] nonce() {
         byte[] bytes = new byte[12];
-        RANDOM.nextBytes(bytes);
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }

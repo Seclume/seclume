@@ -70,7 +70,7 @@ class PostgresPropertyTest {
         System.out.println("PostgresPropertyTest seed=" + seed + " rows=" + rows);
 
         seclumeUrl = "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":"
-                + TestHosts.postgresPort() + "/" + DATABASE + "?user=" + USER
+                + TestHosts.postgresPort() + "/" + DATABASE + "?tls=prefer&user=" + USER
                 + "&provider=file&path=" + file.toString().replace('\\', '/');
         vendorUrl = "jdbc:postgresql://" + TestHosts.postgres() + ":"
                 + TestHosts.postgresPort() + "/" + DATABASE;

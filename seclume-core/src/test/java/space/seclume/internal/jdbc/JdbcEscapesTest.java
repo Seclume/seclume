@@ -105,6 +105,20 @@ class JdbcEscapesTest {
         assertEquals(sql, JdbcEscapes.translate(sql, Dialect.MYSQL));
     }
 
+    /**
+     * Under MySQL's NO_BACKSLASH_ESCAPES a backslash is itself, and 'a\' ends
+     * at its quote: what follows is SQL, and its escape is translated - it was
+     * taken for the rest of the literal and went to the server as it stood.
+     */
+    @Test
+    void underNoBackslashEscapesTheLiteralEndsAtItsQuote() {
+        String sql = "select 'a\\' from t where note like 'a!_b' {escape '!'}";
+        assertEquals("select 'a\\' from t where note like 'a!_b' ESCAPE '!'",
+                JdbcEscapes.translate(sql, Dialect.MYSQL, false));
+        assertEquals(sql, JdbcEscapes.translate(sql, Dialect.MYSQL, true),
+                "with backslash escapes the clause is read as inside a literal");
+    }
+
     @Test
     void likeWithAnEscapeCharacter() {
         assertEquals("select id from t where note like 'a!_b' ESCAPE '!'",

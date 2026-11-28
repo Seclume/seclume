@@ -53,8 +53,13 @@ public final class RecordProtection implements AutoCloseable {
     /** The header is type, two version bytes and two length bytes. */
     public static final int HEADER = 5;
     private static final int MAX_PLAINTEXT = 16384;
-    /** RFC 8446 section 5.2: at most 2^14 + 256 bytes of ciphertext, the tag included. */
-    private static final int MAX_INNER = MAX_PLAINTEXT + 256 - AesGcm.TAG;
+    /**
+     * RFC 8446 section 5.4: TLSInnerPlaintext - content, type and padding - is
+     * at most 2^14 + 1 bytes, tighter than the 2^14 + 256 of ciphertext that
+     * section 5.2 allows. RecordStream checked it before opening; this layer
+     * let 255 bytes more through to whoever called it directly.
+     */
+    private static final int MAX_INNER = MAX_PLAINTEXT + 1;
 
     /** TLS 1.2: the salt in front of the explicit nonce. */
     private static final int SALT = 4;
@@ -64,6 +69,14 @@ public final class RecordProtection implements AutoCloseable {
     private static final int ADDITIONAL = 13;
 
     private final Arena arena = Arena.ofShared();
+    /**
+     * The traffic secret (TLS 1.2: key and salt), the IV and the nonce - in a
+     * SecretScope like every other key: locked in RAM, out of core dumps,
+     * counted and wiped on close. Only the content buffer is plain memory:
+     * it is wiped after every record, and locking 16 KB per connection would
+     * use up the lock limit.
+     */
+    private final space.seclume.secret.SecretScope keys;
     private final boolean tls12;
     /** TLS 1.2 only: the additional data of the record in hand. */
     private final MemorySegment additional;
@@ -87,17 +100,20 @@ public final class RecordProtection implements AutoCloseable {
         this.additional = null;
         this.hash = hash;
         this.keyLength = keyLength;
-        this.secret = arena.allocate(hash.digestLength());
-        MemorySegment.copy(trafficSecret, 0, secret, 0, hash.digestLength());
+        int digest = hash.digestLength();
+        this.keys = space.seclume.secret.SecretScope.allocate(digest + 2 * AesGcm.NONCE + keyLength);
+        MemorySegment all = keys.segment();
+        this.secret = all.asSlice(0, digest);
+        MemorySegment.copy(trafficSecret, 0, secret, 0, digest);
 
-        MemorySegment material = arena.allocate(keyLength);
+        MemorySegment material = all.asSlice(digest + 2L * AesGcm.NONCE, keyLength);
         Hkdf.expandLabel(hash, secret, "key", null, material, 0, keyLength);
         this.key = AesGcmCipher.of(material, 0, keyLength);
         material.fill((byte) 0);
 
-        this.iv = arena.allocate(AesGcm.NONCE);
+        this.iv = all.asSlice(digest, AesGcm.NONCE);
         Hkdf.expandLabel(hash, secret, "iv", null, iv, 0, AesGcm.NONCE);
-        this.nonce = arena.allocate(AesGcm.NONCE);
+        this.nonce = all.asSlice(digest + AesGcm.NONCE, AesGcm.NONCE);
     }
 
     private RecordProtection(HashAlgorithm hash, MemorySegment keyBlock, long keyAt,
@@ -106,12 +122,14 @@ public final class RecordProtection implements AutoCloseable {
         this.hash = hash;
         this.keyLength = keyLength;
         // No traffic secret in TLS 1.2: the key and the salt are what is kept.
-        this.secret = arena.allocate(keyLength + SALT);
+        this.keys = space.seclume.secret.SecretScope.allocate(keyLength + SALT + AesGcm.NONCE);
+        MemorySegment all = keys.segment();
+        this.secret = all.asSlice(0, keyLength + SALT);
         MemorySegment.copy(keyBlock, keyAt, secret, 0, keyLength);
         MemorySegment.copy(keyBlock, saltAt, secret, keyLength, SALT);
         this.key = AesGcmCipher.of(secret, 0, keyLength);
         this.iv = secret.asSlice(keyLength, SALT);
-        this.nonce = arena.allocate(AesGcm.NONCE);
+        this.nonce = all.asSlice(keyLength + SALT, AesGcm.NONCE);
         this.additional = arena.allocate(ADDITIONAL);
     }
 
@@ -264,10 +282,13 @@ public final class RecordProtection implements AutoCloseable {
         if (tls12) {
             throw new IllegalStateException("TLS 1.2 has no KeyUpdate");
         }
-        try (Arena scratch = Arena.ofConfined()) {
-            MemorySegment updated = scratch.allocate(hash.digestLength());
-            Hkdf.expandLabel(hash, secret, "traffic upd", null, updated, 0, hash.digestLength());
-            return new RecordProtection(hash, updated, keyLength);
+        // The next traffic secret: in a SecretScope too, and wiped once the
+        // new key holds its copy - a scratch arena was freed with it inside.
+        try (space.seclume.secret.SecretScope updated =
+                     space.seclume.secret.SecretScope.allocate(hash.digestLength())) {
+            Hkdf.expandLabel(hash, secret, "traffic upd", null, updated.segment(), 0,
+                    hash.digestLength());
+            return new RecordProtection(hash, updated.segment(), keyLength);
         }
     }
 
@@ -461,11 +482,7 @@ public final class RecordProtection implements AutoCloseable {
         try {
             key.close();
         } finally {
-            secret.fill((byte) 0);
-            nonce.fill((byte) 0);
-            if (!tls12) {
-                iv.fill((byte) 0);
-            }
+            keys.close();
             if (additional != null) {
                 additional.fill((byte) 0);
             }

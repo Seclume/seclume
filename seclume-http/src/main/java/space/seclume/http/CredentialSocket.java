@@ -102,7 +102,17 @@ final class CredentialSocket extends SSLSocket {
         @Override
         public void write(byte[] source, int offset, int length) throws IOException {
             synchronized (writing) {
-                consume(source, offset, length);
+                try {
+                    consume(source, offset, length);
+                } catch (CredentialPlaceholders.PlaceholderRefused refused) {
+                    // Half a request is on the wire. Left open, a client that
+                    // reads for an early answer - OkHttp does - waited out its
+                    // read timeout for one the server never sends, and the
+                    // refusal arrived ten seconds late. Over HTTP/2 the header
+                    // compression of both sides no longer agrees either.
+                    CredentialSocket.this.close();
+                    throw refused;
+                }
             }
         }
 
@@ -405,7 +415,7 @@ final class CredentialSocket extends SSLSocket {
 
     /** What little a caller may ask about the session - the certificate was checked by seclume. */
     private final SSLSession session = new SSLSession() {
-        private final long created = System.currentTimeMillis();
+        private final long created = System.currentTimeMillis(); // seclume-allow: SSLSession.getCreationTime is wall-clock time by contract
 
         @Override
         public byte[] getId() {

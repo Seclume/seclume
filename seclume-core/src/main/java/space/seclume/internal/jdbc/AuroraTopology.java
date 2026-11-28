@@ -164,7 +164,10 @@ public final class AuroraTopology implements ClusterTopology {
                 continue;
             }
             String id = entry.substring(0, equals).trim();
-            if (!id.matches("[A-Za-z0-9._-]+")) {
+            // An instance identifier is letters, digits and hyphens - no dot:
+            // one with dots would add labels of the answer's choosing in
+            // front of the cluster's domain.
+            if (!id.matches("[A-Za-z0-9-]+")) {
                 continue;                           // not an instance name
             }
             String flag = entry.substring(equals + 1).trim().toLowerCase(Locale.ROOT);

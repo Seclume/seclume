@@ -28,6 +28,23 @@ import space.seclume.secret.SecretScope;
  */
 final class CngEcdsaSigner implements EcdsaSigner.Backend {
 
+    /**
+     * Uses of the key share it; close() waits for them and frees it alone. A
+     * close while another thread signed or derived freed the native key under
+     * that call - a use after free in native code. Afterwards every use is
+     * refused rather than handed a freed key.
+     */
+    private final java.util.concurrent.locks.ReentrantReadWriteLock use =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
+    private volatile boolean closed;
+
+    private void checkOpen() {
+        if (closed) {
+            throw new IllegalStateException("this native key (" + getClass().getSimpleName()
+                    + ") was closed and its memory freed - it is not used again; make a new one");
+        }
+    }
+
     private static final SymbolLookup LIB =
             SymbolLookup.libraryLookup("bcrypt.dll", Arena.global());
     private static final MethodHandle OPEN =
@@ -116,6 +133,16 @@ final class CngEcdsaSigner implements EcdsaSigner.Backend {
 
     @Override
     public int sign(MemorySegment digest, MemorySegment der) {
+        use.readLock().lock();
+        try {
+            checkOpen();
+            return signLocked(digest, der);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private int signLocked(MemorySegment digest, MemorySegment der) {
         try (Arena arena = Arena.ofConfined();
              SecretScope raw = SecretScope.allocate(2 * curve.field())) {
             MemorySegment count = arena.allocate(JAVA_INT);
@@ -130,6 +157,19 @@ final class CngEcdsaSigner implements EcdsaSigner.Backend {
 
     @Override
     public void close() {
+        use.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            closeLocked();
+        } finally {
+            use.writeLock().unlock();
+        }
+    }
+
+    private void closeLocked() {
         try {
             if (!key.equals(MemorySegment.NULL)) {
                 MemorySegment old = key;

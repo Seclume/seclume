@@ -74,11 +74,43 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
         return block.isNull(column);
     }
 
+    /** A decoder's value, or what it threw for a value cut short. */
+    interface Decoding<T> {
+        T value();
+    }
+
+    /**
+     * A value whose bytes end before its length says - a server that sent
+     * less, or lied: WireBuffer.Truncated is an IllegalStateException, and
+     * left the getter past {@code catch (SQLException e)}.
+     */
+    static <T> T decoded(int column, Decoding<T> decoding) throws SQLException {
+        try {
+            return decoding.value();
+        } catch (space.seclume.internal.WireBuffer.Truncated cut) {
+            throw new SQLException("the value of column " + (column + 1) + " ends before its "
+                    + "length says - the server sent less than it announced", "08S01", cut);
+        } catch (ArithmeticException outOfRange) {
+            // A number that is one, and too large for what was asked:
+            // 2^64 + 5 read with getLong. Out of range, as the other drivers
+            // say it - not "not a number".
+            throw new java.sql.SQLDataException("the value of column " + (column + 1)
+                    + " is out of range for the type asked", "22003", outOfRange);
+        } catch (IllegalArgumentException | java.time.DateTimeException unreadable) {
+            // A value the converter does not take - a type byte that is not
+            // the column's, text where a number was asked for. Only the
+            // getters' own paths caught this; getBoolean's did not.
+            throw new java.sql.SQLDataException("column " + (column + 1)
+                    + " cannot be read as asked", "22018", unreadable);
+        }
+    }
+
     @Override
-    protected String stringAt(int column) {
+    protected String stringAt(int column) throws SQLException {
         TdsColumn description = block.column(column);
-        return TdsValues.asText(block.data(), description.type(), block.offset(column),
-                block.length(column), description.scale(), description.textCharset());
+        return decoded(column, () -> TdsValues.asText(block.data(), description.type(),
+                block.offset(column), block.length(column), description.scale(),
+                description.textCharset()));
     }
 
     /**
@@ -87,47 +119,51 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
      * parse it back is what they cost before.
      */
     @Override
-    protected java.time.LocalDateTime localDateTimeAt(int column) {
+    protected java.time.LocalDateTime localDateTimeAt(int column) throws SQLException {
         TdsColumn description = block.column(column);
-        return TdsValues.asLocalDateTime(block.data(), description.type(), block.offset(column),
-                block.length(column), description.scale());
+        return decoded(column, () -> TdsValues.asLocalDateTime(block.data(), description.type(),
+                block.offset(column), block.length(column), description.scale()));
     }
 
     /** A Timestamp from the fields where they are the text's value, else from the text. */
-    private java.sql.Timestamp timestampAt(int column) {
+    private java.sql.Timestamp timestampAt(int column) throws SQLException {
         java.time.LocalDateTime fields = localDateTimeAt(column);
         return fields != null ? java.sql.Timestamp.valueOf(fields) : java.sql.Timestamp.valueOf(stringAt(column));
     }
 
     /** A decimal from its bytes, without the text in between where it fits a long. */
     @Override
-    protected java.math.BigDecimal decimalAt(int column) {
+    protected java.math.BigDecimal decimalAt(int column) throws SQLException {
         TdsColumn description = block.column(column);
-        return TdsValues.asBigDecimal(block.data(), description.type(), block.offset(column),
-                block.length(column), description.scale());
+        return decoded(column, () -> TdsValues.asBigDecimal(block.data(), description.type(),
+                block.offset(column), block.length(column), description.scale()));
     }
 
     @Override
-    protected long longAt(int column) {
-        return TdsValues.asLong(block.data(), block.column(column).type(),
-                block.offset(column), block.length(column));
+    protected long longAt(int column) throws SQLException {
+        int type = block.column(column).type();
+        return decoded(column, () -> TdsValues.asLong(block.data(), type, block.offset(column),
+                block.length(column)));
     }
 
     @Override
-    protected double doubleAt(int column) {
-        return TdsValues.asDouble(block.data(), block.column(column).type(),
-                block.offset(column), block.length(column));
+    protected double doubleAt(int column) throws SQLException {
+        int type = block.column(column).type();
+        return decoded(column, () -> TdsValues.asDouble(block.data(), type, block.offset(column),
+                block.length(column)));
     }
 
     @Override
-    protected byte[] bytesAt(int column) {
-        return TdsValues.asBytes(block.data(), block.offset(column), block.length(column));
+    protected byte[] bytesAt(int column) throws SQLException {
+        return decoded(column, () -> TdsValues.asBytes(block.data(), block.offset(column),
+                block.length(column)));
     }
 
     @Override
-    protected boolean booleanAt(int column) {
-        return TdsValues.asBoolean(block.data(), block.column(column).type(),
-                block.offset(column), block.length(column));
+    protected boolean booleanAt(int column) throws SQLException {
+        int type = block.column(column).type();
+        return decoded(column, () -> TdsValues.asBoolean(block.data(), type,
+                block.offset(column), block.length(column)));
     }
 
     /**

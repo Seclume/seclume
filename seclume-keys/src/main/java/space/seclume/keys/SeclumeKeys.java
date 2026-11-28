@@ -129,8 +129,26 @@ public final class SeclumeKeys {
      * certificate is not the key's.
      */
     public static X509ExtendedKeyManager keyManager(Path chain, String keySpec) {
-        X509Certificate[] certificates = certificates(chain);
-        OpenSslPrivateKey key = (OpenSslPrivateKey) privateKey(keySpec);
+        return paired(chain, (OpenSslPrivateKey) privateKey(keySpec));
+    }
+
+    /**
+     * The same, the key read from {@code key} - a provider built in code, as
+     * a program builds one for a key file its own configuration names:
+     * {@code provider=file} from a URL is for where the JVM allows it.
+     */
+    public static X509ExtendedKeyManager keyManager(Path chain, SecretProvider key) {
+        return paired(chain, (OpenSslPrivateKey) privateKey(key));
+    }
+
+    private static X509ExtendedKeyManager paired(Path chain, OpenSslPrivateKey key) {
+        X509Certificate[] certificates;
+        try {
+            certificates = certificates(chain);
+        } catch (RuntimeException unreadable) {
+            key.destroy();
+            throw unreadable;
+        }
         byte[] expected = key.nativeKey().publicKey.getEncoded();
         if (!Arrays.equals(expected, certificates[0].getPublicKey().getEncoded())) {
             key.destroy();
@@ -154,7 +172,15 @@ public final class SeclumeKeys {
                     + "reloaded from disk - leave out the reload interval; the key stays "
                     + "where it is and so does its certificate");
         }
-        return new ReloadingKeyManager(chain, keySpec, provider(keySpec), interval);
+        return new ReloadingKeyManager(chain, provider(keySpec),
+                () -> (SeclumeKeyManager) keyManager(chain, keySpec), interval);
+    }
+
+    /** As {@link #keyManager(Path, String, Duration)}, the key read from a provider built in code. */
+    public static X509ExtendedKeyManager keyManager(Path chain, SecretProvider key,
+                                                    Duration interval) {
+        return new ReloadingKeyManager(chain, key,
+                () -> (SeclumeKeyManager) keyManager(chain, key), interval);
     }
 
     /** {@link #keyManager(Path, String, Duration)} as a factory. */
@@ -258,9 +284,17 @@ public final class SeclumeKeys {
                 }
             }
         }
+        if (peers.isEmpty()) {
+            // Not refused: a whole trust domain is how SPIFFE authorizes by
+            // default. But it is a wide door, and it is said once, at start.
+            System.getLogger(SeclumeKeys.class.getName()).log(System.Logger.Level.WARNING,
+                    "SPIFFE without peer-ids: any workload of this workload's own trust domain "
+                            + "is accepted as a peer. Name the ones meant with "
+                            + "peer-ids=spiffe://...");
+        }
         return new Spiffe(new Factory(keys),
                 new TrustFactory(new SpiffeTrustManager(keys::bundleFor, keys::allBundles,
-                        peers)));
+                        peers, keys::trustDomain)));
     }
 
     /** A {@code TrustManagerFactory} that hands out the one trust manager it was made with. */

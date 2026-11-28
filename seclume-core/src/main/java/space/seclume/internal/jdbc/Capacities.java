@@ -34,14 +34,25 @@ public final class Capacities {
     }
 
     private static int number(Connection connection, String sql) {
-        try (Statement statement = connection.createStatement();
-             ResultSet rows = statement.executeQuery(sql)) {
+        try (Statement statement = connection.createStatement()) {
+            // A probe of the pool's own, on a connection nobody has yet: bounded,
+            // or a server that never answers keeps the pool's slot for ever.
+            statement.setQueryTimeout(PROBE_SECONDS);
+            return first(statement.executeQuery(sql));
+        } catch (SQLException notVisible) {
+            return -1;
+        }
+    }
+
+    /** {@code seclume.pool.probeSeconds}: how long a capacity or idle-limit probe may take. */
+    static final int PROBE_SECONDS = Integer.getInteger("seclume.pool.probeSeconds", 5);
+
+    private static int first(ResultSet result) throws SQLException {
+        try (ResultSet rows = result) {
             if (rows.next()) {
                 long value = rows.getLong(1);
                 return rows.wasNull() ? -1 : (int) Math.min(Integer.MAX_VALUE, value);
             }
-            return -1;
-        } catch (SQLException notVisible) {
             return -1;
         }
     }

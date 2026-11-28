@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,6 +62,72 @@ class SubjectKeysTest {
         try (SecretScope out = SecretScope.allocate(256)) {
             out.length(column.decrypt(value, out.segment()));
             return new String(out.secret().toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Two nodes over one store: a subject shredded on one reached the other
+     * only when its cached ring fell out of the cache - on a busy subject,
+     * never. A cached ring is read again once it is older than its maximum age.
+     */
+    @Test
+    void aShredElsewhereReachesThisNodeWithinTheMaximumAge() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store);
+             SubjectKeys there = SubjectKeys.of(master, store)) {
+            java.lang.reflect.Field age = SubjectKeys.class.getDeclaredField("maxAgeNanos");
+            age.setAccessible(true);
+            age.setLong(here, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100));
+            byte[] stored = here.column("customer-1", "customer.email", Mode.RANDOMIZED)
+                    .encrypt(text("alice@example.org"));
+            assertEquals("alice@example.org", read(here.existingColumn("customer-1",
+                    "customer.email", Mode.RANDOMIZED), stored));
+            assertTrue(there.shred("customer-1"));
+            Thread.sleep(200);
+            assertThrows(RuntimeException.class, () -> read(here.existingColumn("customer-1",
+                    "customer.email", Mode.RANDOMIZED), stored),
+                    "the shredded subject was still read here");
+        }
+    }
+
+    /**
+     * Within its age a cached ring is used as it is - the store is not asked
+     * on every read. (A shred on this node reaches it at once; one elsewhere,
+     * within the age.)
+     */
+    @Test
+    void aCachedRingIsUsedWithinItsAge() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store);
+             SubjectKeys there = SubjectKeys.of(master, store)) {
+            byte[] stored = here.column("customer-2", "customer.email", Mode.RANDOMIZED)
+                    .encrypt(text("bob@example.org"));
+            assertTrue(there.shred("customer-2"));
+            assertEquals("bob@example.org", read(here.existingColumn("customer-2",
+                    "customer.email", Mode.RANDOMIZED), stored),
+                    "a ring within its age was read again from the store");
+        }
+    }
+
+    /** A ring past its age is read again, and the one it replaces is wiped. */
+    @Test
+    void aRingReadAgainWipesTheOneItReplaces() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store)) {
+            java.lang.reflect.Field age = SubjectKeys.class.getDeclaredField("maxAgeNanos");
+            age.setAccessible(true);
+            age.setLong(here, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50));
+            EncryptedColumn before = here.column("customer-3", "customer.email", Mode.RANDOMIZED);
+            byte[] stored = before.encrypt(text("carol@example.org"));
+            Thread.sleep(150);
+            EncryptedColumn after = here.existingColumn("customer-3", "customer.email",
+                    Mode.RANDOMIZED);
+            assertEquals("carol@example.org", read(after, stored));
+            assertThrows(RuntimeException.class, () -> before.encrypt(text("x")),
+                    "the replaced ring still held its key");
         }
     }
 
@@ -256,6 +323,64 @@ class SubjectKeysTest {
         }
     }
 
+    /**
+     * A shred while the subject's key was being read let the reader cache the
+     * key just deleted and read on with it - the shredded subject readable
+     * again from that instance until it closed.
+     */
+    @Test
+    void aShredDuringAReadLeavesNothingToRead() throws Exception {
+        SubjectKeyStore shared = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1)) {
+            byte[] value;
+            try (SubjectKeys writer = SubjectKeys.of(master, shared)) {
+                value = writer.column("ann", "c", Mode.RANDOMIZED).encrypt(text("A"));
+            }
+            java.util.concurrent.CountDownLatch loading = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch shredded = new java.util.concurrent.CountDownLatch(1);
+            SubjectKeyStore slow = new SubjectKeyStore() {
+                @Override
+                public byte[] load(String subject) {
+                    byte[] wrapped = shared.load(subject);     // read before the shred
+                    loading.countDown();
+                    try {
+                        shredded.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return wrapped;
+                }
+
+                @Override
+                public boolean insert(String subject, byte[] wrapped) {
+                    return shared.insert(subject, wrapped);
+                }
+
+                @Override
+                public boolean delete(String subject) {
+                    return shared.delete(subject);
+                }
+            };
+            try (SubjectKeys subjects = SubjectKeys.of(master, slow)) {
+                java.util.concurrent.CompletableFuture<String> reader =
+                        java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                                read(subjects.existingColumn("ann", "c", Mode.RANDOMIZED), value));
+                loading.await();
+                subjects.shred("ann");
+                shredded.countDown();
+                java.util.concurrent.ExecutionException failed = assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> reader.get(10, java.util.concurrent.TimeUnit.SECONDS));
+                assertTrue(failed.getCause() instanceof FieldEncryptionException,
+                        String.valueOf(failed.getCause()));
+            }
+            try (SubjectKeys after = SubjectKeys.of(master, shared)) {
+                assertThrows(FieldEncryptionException.class,
+                        () -> after.existingColumn("ann", "c", Mode.RANDOMIZED));
+            }
+        }
+    }
+
     @Test
     void subjectRingsDoNotFloodTheInventory() {
         try (FieldKeys master = ring(1, MASTER1);
@@ -351,6 +476,289 @@ class SubjectKeysTest {
                 one.column("b", "c", Mode.RANDOMIZED);
                 assertEquals("first", read(one.existingColumn("a", "c", Mode.RANDOMIZED), a),
                         "a ring that left the cache is made again from its key in the store");
+            }
+        }
+    }
+
+    /**
+     * The race the load test below found in CI, made certain: a reader comes
+     * between shred()'s forgetting the cached ring and the store's delete,
+     * loads the key that is still stored, and caches its ring. Every read
+     * after the shred then opened the subject's values again. The store here
+     * holds the delete until that reader has cached its ring.
+     */
+    @Test
+    void aRingReadFromTheStoreDuringTheShredIsNotKept() throws Exception {
+        SubjectKeyStore memory = SubjectKeyStore.inMemory();
+        java.util.concurrent.CountDownLatch deleting = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch readerDone = new java.util.concurrent.CountDownLatch(1);
+        SubjectKeyStore holding = new SubjectKeyStore() {
+            @Override
+            public byte[] load(String subject) {
+                return memory.load(subject);
+            }
+
+            @Override
+            public boolean insert(String subject, byte[] wrapped) {
+                return memory.insert(subject, wrapped);
+            }
+
+            @Override
+            public boolean delete(String subject) {
+                deleting.countDown();
+                try {
+                    readerDone.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return memory.delete(subject);
+            }
+        };
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, holding)) {
+            byte[] value = subjects.column("alice", "order.address", Mode.RANDOMIZED)
+                    .encrypt(text("street 1"));
+            Thread shredder = Thread.ofPlatform().start(() -> subjects.shred("alice"));
+            assertTrue(deleting.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            // Between the forgetting and the delete: the key is still stored.
+            try {
+                read(subjects.existingColumn("alice", "order.address", Mode.RANDOMIZED), value);
+            } catch (RuntimeException refused) {
+                // refused already - as good
+            } finally {
+                readerDone.countDown();
+            }
+            shredder.join(10_000);
+            assertThrows(RuntimeException.class, () -> read(subjects.existingColumn("alice",
+                    "order.address", Mode.RANDOMIZED), value),
+                    "a ring read from the store during the shred outlived it");
+        }
+    }
+
+    /**
+     * The cached ring goes before the delete: a read while the store is
+     * deleting - the key gone from it already - finds no ring cached and is
+     * refused, rather than opening the value with the ring it had.
+     */
+    @Test
+    void aReadWhileTheStoreDeletesFindsNoCachedRing() throws Exception {
+        SubjectKeyStore memory = SubjectKeyStore.inMemory();
+        java.util.concurrent.CountDownLatch deleted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch readerDone = new java.util.concurrent.CountDownLatch(1);
+        SubjectKeyStore holding = new SubjectKeyStore() {
+            @Override
+            public byte[] load(String subject) {
+                return memory.load(subject);
+            }
+
+            @Override
+            public boolean insert(String subject, byte[] wrapped) {
+                return memory.insert(subject, wrapped);
+            }
+
+            @Override
+            public boolean delete(String subject) {
+                boolean had = memory.delete(subject);
+                deleted.countDown();
+                try {
+                    readerDone.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return had;
+            }
+        };
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, holding)) {
+            byte[] value = subjects.column("alice", "order.address", Mode.RANDOMIZED)
+                    .encrypt(text("street 1"));
+            Thread shredder = Thread.ofPlatform().start(() -> subjects.shred("alice"));
+            assertTrue(deleted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            try {
+                assertThrows(RuntimeException.class, () -> read(subjects.existingColumn("alice",
+                        "order.address", Mode.RANDOMIZED), value),
+                        "a read during the delete opened the value with the cached ring");
+            } finally {
+                readerDone.countDown();
+            }
+            shredder.join(10_000);
+        }
+    }
+
+    /**
+     * Shredded while a reader was loading its key: the reader is refused, and
+     * the ring it had made from the deleted key is closed - not cached, and
+     * not left in memory either.
+     */
+    @Test
+    void aRingMadeWhileTheSubjectWasShreddedIsRefusedAndClosed() throws Exception {
+        SubjectKeyStore memory = SubjectKeyStore.inMemory();
+        byte[] value;
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys writer = SubjectKeys.of(master, memory)) {
+            value = writer.column("alice", "order.address", Mode.RANDOMIZED).encrypt(text("street 1"));
+        }
+        long before = SecretScope.open();
+        java.util.concurrent.CountDownLatch loading = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch shredded = new java.util.concurrent.CountDownLatch(1);
+        SubjectKeyStore slow = new SubjectKeyStore() {
+            @Override
+            public byte[] load(String subject) {
+                byte[] wrapped = memory.load(subject);
+                loading.countDown();
+                try {
+                    shredded.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return wrapped;
+            }
+
+            @Override
+            public boolean insert(String subject, byte[] wrapped) {
+                return memory.insert(subject, wrapped);
+            }
+
+            @Override
+            public boolean delete(String subject) {
+                return memory.delete(subject);
+            }
+        };
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, slow)) {
+            RuntimeException[] refused = new RuntimeException[1];
+            Thread reader = Thread.ofPlatform().start(() -> {
+                try {
+                    read(subjects.existingColumn("alice", "order.address", Mode.RANDOMIZED), value);
+                } catch (RuntimeException e) {
+                    refused[0] = e;
+                }
+            });
+            assertTrue(loading.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            subjects.shred("alice");
+            shredded.countDown();
+            reader.join(10_000);
+            assertTrue(refused[0] != null && refused[0].getMessage().contains("shredded while"),
+                    "the reader was not refused: " + refused[0]);
+        }
+        assertEquals(before, SecretScope.open(), "the ring of a deleted key stayed in memory");
+    }
+
+    /**
+     * Two readers load the same subject at once; the second caches its ring
+     * first. The first's ring is not cached - and is closed: its key does not
+     * stay in memory with nobody holding it.
+     */
+    @Test
+    void theRingOfTheReaderThatLostTheRaceIsClosed() throws Exception {
+        SubjectKeyStore memory = SubjectKeyStore.inMemory();
+        byte[] value;
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys writer = SubjectKeys.of(master, memory)) {
+            value = writer.column("alice", "order.address", Mode.RANDOMIZED).encrypt(text("street 1"));
+        }
+        long before = SecretScope.open();
+        java.util.concurrent.CountDownLatch firstLoading = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch secondDone = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger loads = new java.util.concurrent.atomic.AtomicInteger();
+        SubjectKeyStore racing = new SubjectKeyStore() {
+            @Override
+            public byte[] load(String subject) {
+                byte[] wrapped = memory.load(subject);
+                if (loads.incrementAndGet() == 1) {
+                    firstLoading.countDown();
+                    try {
+                        secondDone.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return wrapped;
+            }
+
+            @Override
+            public boolean insert(String subject, byte[] wrapped) {
+                return memory.insert(subject, wrapped);
+            }
+
+            @Override
+            public boolean delete(String subject) {
+                return memory.delete(subject);
+            }
+        };
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, racing)) {
+            String[] first = new String[1];
+            Thread loser = Thread.ofPlatform().start(() -> first[0] = read(subjects.existingColumn(
+                    "alice", "order.address", Mode.RANDOMIZED), value));
+            assertTrue(firstLoading.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            try {
+                assertEquals("street 1", read(subjects.existingColumn("alice", "order.address",
+                        Mode.RANDOMIZED), value));
+            } finally {
+                secondDone.countDown();
+            }
+            loser.join(10_000);
+            assertEquals("street 1", first[0]);
+        }
+        assertEquals(before, SecretScope.open(), "a ring's key stayed in memory after close");
+    }
+
+    /**
+     * Under load: eight readers keep opening values written before the shred
+     * while it happens. A read that began after shred() returned and still
+     * opened a value is the failure - a key kept by a ring in a reader's hands
+     * past the shred.
+     */
+    @Test
+    void noReadThatBeginsAfterTheShredOpensAValueWrittenBeforeIt() throws Exception {
+        for (int round = 0; round < 10; round++) {
+            try (FieldKeys master = ring(1, MASTER1);
+                 SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.inMemory())) {
+                List<byte[]> before = new ArrayList<>();
+                for (int i = 0; i < 16; i++) {
+                    before.add(subjects.column("alice", "order.address", Mode.RANDOMIZED)
+                            .encrypt(text("street " + i)));
+                }
+                java.util.concurrent.atomic.AtomicLong shredDone =
+                        new java.util.concurrent.atomic.AtomicLong(Long.MAX_VALUE);
+                java.util.concurrent.atomic.AtomicReference<String> violation =
+                        new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.atomic.AtomicBoolean stop =
+                        new java.util.concurrent.atomic.AtomicBoolean();
+                java.util.concurrent.CountDownLatch going = new java.util.concurrent.CountDownLatch(8);
+                List<Thread> readers = new ArrayList<>();
+                for (int r = 0; r < 8; r++) {
+                    int offset = r;
+                    readers.add(Thread.ofPlatform().start(() -> {
+                        going.countDown();
+                        int i = offset;
+                        while (!stop.get()) {
+                            long began = System.nanoTime();
+                            try {
+                                read(subjects.existingColumn("alice", "order.address",
+                                        Mode.RANDOMIZED), before.get(i++ % before.size()));
+                                if (began - shredDone.get() > 0) {
+                                    violation.compareAndSet(null, "a read begun "
+                                            + (began - shredDone.get()) / 1000 + " us after the "
+                                            + "shred opened a value written before it");
+                                }
+                            } catch (RuntimeException refused) {
+                                // after the shred, as it should be
+                            }
+                        }
+                    }));
+                }
+                going.await();
+                Thread.sleep(2);
+                assertTrue(subjects.shred("alice"));
+                shredDone.set(System.nanoTime());
+                Thread.sleep(20);
+                stop.set(true);
+                for (Thread reader : readers) {
+                    reader.join();
+                }
+                assertNull(violation.get(), violation.get());
             }
         }
     }

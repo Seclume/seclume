@@ -36,6 +36,20 @@ public final class Transports {
 
     private static final String IF_AVAILABLE = "-if-available";
 
+    /**
+     * The transports a URL or the property may name, comma-separated - unset,
+     * any provider on the class path. A provider is code the class path
+     * already runs, and a URL only picks among them; where URLs come from
+     * further away than the class path, this keeps them to the ones meant.
+     * {@code socket} is always allowed.
+     */
+    public static final String ALLOWED = "seclume.transport.allowed";
+
+    private static final System.Logger LOG = System.getLogger(Transports.class.getName());
+
+    /** The names whose provider was named in the log already: once each. */
+    private static final java.util.Set<String> SAID = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** The URL option, and the connection property, that name a transport. */
     public static final String OPTION = "transport";
 
@@ -120,17 +134,176 @@ public final class Transports {
             } catch (IOException notOffered) {
                 // a transport without a timeout of its own: the login is not watched
             }
+            // And a bound on the login as a whole: the watch above counts
+            // silence only, and a server that sends a byte now and then kept
+            // a login - and the pool's thread and permit - for as long as it
+            // liked. seclume.loginBudgetFactor times the connect timeout - at
+            // least once it, as everywhere the factor is read: a factor of 0
+            // closed every login at once.
+            long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+            long budget = connectTimeoutMillis * factor;
+            watch(opened, budget, "the login to " + host + ":" + port + " did not finish within "
+                    + "its budget of " + (budget + 999) / 1000 + " s (seclume.loginBudgetFactor "
+                    + factor + " x the connect timeout of " + connectTimeoutMillis + " ms)");
         }
         return opened;
     }
 
+    /**
+     * A login's budget: whoever takes it out of {@link #LOGINS} first decides
+     * - {@link #loggedIn}, and the connection stays; the task, and it closes
+     * it. Cancelled only, the task could already be running when the login
+     * finished, and closed the connection the driver had just been given.
+     */
+    private static final class Watch {
+        volatile java.util.concurrent.ScheduledFuture<?> task;
+    }
+
+    /** Closes {@code transport} after {@code millis} unless {@link #loggedIn} comes first. */
+    static void watch(Transport transport, long millis) {
+        watch(transport, millis, null);
+    }
+
+    /**
+     * As {@link #watch(Transport, long)}; when the budget closes the
+     * connection, {@code spent} is what the login's thread is told - see
+     * {@link #late(java.sql.SQLException)} - instead of the read the close broke.
+     */
+    static void watch(Transport transport, long millis, String spent) {
+        Watch watch = new Watch();
+        Thread login = Thread.currentThread();
+        long number = LOGIN_NUMBERS.incrementAndGet();
+        synchronized (SPENT) {
+            SPENT.remove(login);
+            LATEST.put(login, number);
+        }
+        LOGINS.put(transport, watch);
+        watch.task = Budget.SERVICE.schedule(() -> {
+            if (LOGINS.remove(transport, watch)) {
+                if (spent != null) {
+                    synchronized (SPENT) {
+                        // Only for the thread's latest login: a login that failed
+                        // without its budget lifted left the budget running, and it
+                        // fired into the next login of the same thread - a refused
+                        // password reported as a login past its budget (found in CI).
+                        if (Long.valueOf(number).equals(LATEST.get(login))) {
+                            SPENT.put(login, spent);
+                        }
+                    }
+                }
+                transport.close();
+            }
+        }, millis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /** Threads whose login a budget closed, and what to tell them. */
+    private static final java.util.Map<Thread, String> SPENT = new java.util.WeakHashMap<>();
+    /** Each thread's latest login, by number - see {@link #watch(Transport, long, String)}. */
+    private static final java.util.Map<Thread, Long> LATEST = new java.util.WeakHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong LOGIN_NUMBERS =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * What a failed login is reported as: {@code failure} itself, unless the
+     * login's budget closed its connection - then a timeout saying so, with
+     * the seconds and the factor, {@code failure} as its cause. Called on the
+     * thread that opened the connection, around the whole of the login.
+     */
+    public static java.sql.SQLException late(java.sql.SQLException failure) {
+        String spent;
+        synchronized (SPENT) {
+            spent = SPENT.remove(Thread.currentThread());
+        }
+        if (spent == null) {
+            return failure;
+        }
+        return new java.sql.SQLTransientConnectionException(spent, "08001", failure);
+    }
+
+    /** Takes the budget off {@code transport}; whether it was still on - then nothing closes it. */
+    static boolean lift(Transport transport) {
+        Watch watch = LOGINS.remove(transport);
+        if (watch == null) {
+            return false;
+        }
+        if (watch.task != null) { // mutation-equivalent: a task left to run finds its watch gone and closes nothing
+            watch.task.cancel(false);
+        }
+        return true;
+    }
+
+    /** Logins under way, and what closes each when its budget is spent. */
+    private static final java.util.Map<Transport, Watch> LOGINS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final class Budget {
+        static final java.util.concurrent.ScheduledExecutorService SERVICE =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "seclume-login-budget");
+                    t.setDaemon(true);
+                    return t;
+                });
+    }
+
+    /** Runs {@code task} after {@code millis}, on the thread that watches logins. */
+    static java.util.concurrent.ScheduledFuture<?> after(long millis, Runnable task) {
+        return Budget.SERVICE.schedule(task, millis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     /** The login is done: lifts the watch {@link #open} set on it. */
     public static void loggedIn(Transport transport) {
+        lift(transport);
         try {
             transport.networkTimeout(0);
         } catch (IOException notOffered) {
             // nothing was watched
         }
+    }
+
+    /**
+     * The one provider of {@code name}, or null. The first of two used to
+     * win without a word: a second jar offering the same name - an old
+     * version, or one put there to carry the connections - decided by class
+     * path order which of them saw every byte. Two are an error now, naming
+     * both.
+     */
+    static TransportProvider only(String name, Iterable<TransportProvider> providers)
+            throws IOException {
+        TransportProvider found = null;
+        for (TransportProvider provider : providers) {
+            if (!name.equalsIgnoreCase(provider.name())) {
+                continue;
+            }
+            if (found != null) {
+                throw new IOException("two transports are called '" + name + "': "
+                        + where(found) + " and " + where(provider) + " - remove one");
+            }
+            found = provider;
+        }
+        return found;
+    }
+
+    /** Refuses a name {@link #ALLOWED} does not list, where it is set. */
+    static void allowed(String name) throws IOException {
+        String list = System.getProperty(ALLOWED);
+        if (list == null || list.isBlank() || DEFAULT.equals(name)) {
+            return;
+        }
+        for (String allowed : list.split(",")) {
+            if (allowed.trim().equalsIgnoreCase(name)) {
+                return;
+            }
+        }
+        throw new IOException("the transport '" + name + "' is not one " + ALLOWED
+                + " allows (" + list.trim() + ") - nothing was opened");
+    }
+
+    private static String where(TransportProvider provider) {
+        java.security.CodeSource source = provider.getClass().getProtectionDomain()
+                .getCodeSource();
+        return provider.getClass().getName()
+                + (source == null || source.getLocation() == null ? ""
+                        : " from " + source.getLocation());
     }
 
     private static Transport connect(String kind, String host, int port,
@@ -147,9 +320,12 @@ public final class Transports {
         if (DEFAULT.equals(name)) {
             return SocketTransport.connect(host, port, connectTimeoutMillis);
         }
-        for (TransportProvider provider : ServiceLoader.load(TransportProvider.class)) {
-            if (!name.equalsIgnoreCase(provider.name())) {
-                continue;
+        allowed(name);
+        TransportProvider provider = only(name, ServiceLoader.load(TransportProvider.class));
+        if (provider != null) {
+            if (SAID.add(name)) {
+                LOG.log(System.Logger.Level.INFO, "seclume: connections with transport '" + name
+                        + "' go through " + where(provider));
             }
             if (orSocket && !provider.available()) {
                 return SocketTransport.connect(host, port, connectTimeoutMillis);

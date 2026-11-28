@@ -221,8 +221,11 @@ class LocalKafkaSaslSslTest {
         try (Admin admin = Admin.create(plain(password));
              space.seclume.field.FieldKeys keys = space.seclume.field.FieldKeys.builder().key(1, key).build()) {
             admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+            // The key wrapped in KeyBinding: the value is bound to it - and this is where the
+            // real producer and consumer show they hand key and value one Headers object.
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(plain(password),
-                    new StringSerializer(), new EncryptingSerializer<>(new StringSerializer(), keys,
+                    KeyBinding.serializer(new StringSerializer()),
+                    new EncryptingSerializer<>(new StringSerializer(), keys,
                             space.seclume.field.EncryptedColumn.Mode.RANDOMIZED))) {
                 producer.send(new ProducerRecord<>(topic, "order", value)).get();
             }
@@ -239,7 +242,8 @@ class LocalKafkaSaslSslTest {
         consuming.putAll(plain(password));
         consuming.put("group.id", "seclume-" + UUID.randomUUID());
         consuming.put("auto.offset.reset", "earliest");
-        try (KafkaConsumer<String, T> consumer = new KafkaConsumer<>(consuming, new StringDeserializer(), values)) {
+        try (KafkaConsumer<String, T> consumer = new KafkaConsumer<>(consuming,
+                KeyBinding.deserializer(new StringDeserializer()), values)) {
             consumer.subscribe(List.of(topic));
             for (int i = 0; i < 30; i++) {
                 for (org.apache.kafka.clients.consumer.ConsumerRecord<String, T> record

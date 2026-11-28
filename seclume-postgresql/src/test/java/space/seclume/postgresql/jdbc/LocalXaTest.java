@@ -56,10 +56,11 @@ class LocalXaTest {
                 + TestHosts.postgres() + ":" + TestHosts.postgresPort());
     }
 
-    private static SeclumeXaDataSource source() {
+    private static SeclumeXaDataSource source() throws java.sql.SQLException {
         SeclumeXaDataSource source = new SeclumeXaDataSource();
         SeclumeDataSource settings = source.settings();
         settings.setHost(TestHosts.postgres());
+        settings.setTls("prefer");
         settings.setPort(TestHosts.postgresPort());
         settings.setDatabase(DATABASE);
         settings.setUser(USER);

@@ -24,7 +24,7 @@ class SeclumeAssessmentTest {
 
     @Test
     void aWellSecuredQuietPoolIsOk() {
-        SeclumeAssessment assessment = SeclumeAssessment.of("scram-sha-256-plus", TLS13,
+        SeclumeAssessment assessment = SeclumeAssessment.of("scram-sha-256-plus", TLS13, true,
                 NOW.plus(Duration.ofDays(200)), quiet(), 10, 0, NOW);
         assertEquals(SeclumeAssessment.Level.OK, assessment.grade());
         assertTrue(assessment.findings().isEmpty());
@@ -47,7 +47,7 @@ class SeclumeAssessmentTest {
     }
 
     private static SeclumeAssessment.Level grade(Instant expires) {
-        return SeclumeAssessment.of("scram-sha-256", TLS13, expires, quiet(), 10, 0, NOW)
+        return SeclumeAssessment.of("scram-sha-256", TLS13, true, expires, quiet(), 10, 0, NOW)
                 .grade();
     }
 
@@ -55,11 +55,27 @@ class SeclumeAssessmentTest {
     void weakLoginsWarnAndTls12IsANote() {
         for (String weak : List.of("md5", "password", "trust", "mysql_native_password")) {
             assertEquals(SeclumeAssessment.Level.WARNING, SeclumeAssessment.of(weak, TLS13,
-                    null, quiet(), 10, 0, NOW).grade(), weak);
+                    true, null, quiet(), 10, 0, NOW).grade(), weak);
         }
         assertEquals(SeclumeAssessment.Level.NOTE, SeclumeAssessment.of("scram-sha-256",
-                "TLSv1.2 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 (seclume)", null, quiet(), 10,
+                "TLSv1.2 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 (seclume)", true, null, quiet(), 10,
                 0, NOW).grade());
+    }
+
+    /**
+     * Encrypted is not authenticated: under tls=prefer or require a man in the
+     * middle reads the session, and the grade says so - as it does where the
+     * driver cannot tell.
+     */
+    @Test
+    void tlsWithoutACheckedServerWarns() {
+        SeclumeAssessment unchecked = SeclumeAssessment.of("scram-sha-256-plus", TLS13, false,
+                NOW.plus(Duration.ofDays(200)), quiet(), 10, 0, NOW);
+        assertEquals(SeclumeAssessment.Level.WARNING, unchecked.grade());
+        assertTrue(unchecked.findings().get(0).toString().contains("not checked"),
+                unchecked.findings().toString());
+        assertEquals(SeclumeAssessment.Level.WARNING, SeclumeAssessment.of("scram-sha-256-plus",
+                TLS13, null, NOW.plus(Duration.ofDays(200)), quiet(), 10, 0, NOW).grade());
     }
 
     @Test

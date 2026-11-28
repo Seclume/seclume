@@ -92,6 +92,49 @@ class JsonOffRegressionTest {
         assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\nb\"}", "p"));
     }
 
+    private static byte[] decoded(String json, String... path) {
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+            MemorySegment document = arena.allocate(Math.max(bytes.length, 1));
+            MemorySegment.copy(bytes, 0, document, ValueLayout.JAVA_BYTE, 0, bytes.length);
+            MemorySegment out = arena.allocate(64);
+            int length = JsonOff.string(document, bytes.length, out, path);
+            return out.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
+
+    /** An escape is written as the UTF-8 it stands for, on both sides of the two-byte limit. */
+    @Test
+    void escapesAtTheUtf8LengthBoundariesAreWrittenRight() {
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {(byte) 0xdf, (byte) 0xbf},
+                decoded("{\"p\": \"\\u07ff\"}", "p"), "U+07FF is two bytes");
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new byte[] {(byte) 0xe0, (byte) 0xa0, (byte) 0x80},
+                decoded("{\"p\": \"\\u0800\"}", "p"), "U+0800 is three bytes");
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {0x7f},
+                decoded("{\"p\": \"\\u007f\"}", "p"), "U+007F is one byte");
+    }
+
+    /** DEL is no control character in JSON: a field named by it is a field like any other. */
+    @Test
+    void aFieldNamedByDelIsFound() {
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] bytes = "{\"\u007f\": 1}".getBytes(StandardCharsets.UTF_8);
+            MemorySegment document = arena.allocate(bytes.length);
+            MemorySegment.copy(bytes, 0, document, ValueLayout.JAVA_BYTE, 0, bytes.length);
+            org.junit.jupiter.api.Assertions.assertTrue(JsonOff.has(document, bytes.length, "\u007f"));
+            assertFalse(JsonOff.has(document, bytes.length, "\u007e"));
+        }
+    }
+
+    /** The edges of RFC 8259's range: NUL and U+001F refused, a space read. */
+    @Test
+    void aRawNulInAStringIsRefused() {
+        assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\u0000b\"}", "p"));
+        assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\u001fb\"}", "p"));
+        assertEquals(3, string("{\"p\": \"a b\"}", "p"));
+    }
+
     @Test
     void aRawControlCharacterInASkippedValueIsRefused() {
         assertThrows(JsonOff.NotFound.class,

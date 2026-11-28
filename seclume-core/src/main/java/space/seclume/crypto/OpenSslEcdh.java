@@ -19,6 +19,23 @@ import java.lang.invoke.MethodHandle;
  * {@link OpenSslP256} makes for P-256, and {@code HybridMlKem}'s for X25519.
  */
 final class OpenSslEcdh implements NativeEcdh.Backend {
+
+    /**
+     * Uses of the key share it; close() waits for them and frees it alone. A
+     * close while another thread signed or derived freed the native key under
+     * that call - a use after free in native code. Afterwards every use is
+     * refused rather than handed a freed key.
+     */
+    private final java.util.concurrent.locks.ReentrantReadWriteLock use =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
+    private volatile boolean closed;
+
+    private void checkOpen() {
+        if (closed) {
+            throw new IllegalStateException("this native key (" + getClass().getSimpleName()
+                    + ") was closed and its memory freed - it is not used again; make a new one");
+        }
+    }
     private static final SymbolLookup LIB = LibCrypto.lookup();
     private static final MethodHandle NEW = bind("EVP_PKEY_CTX_new_from_name", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle NEW_KEY = bind("EVP_PKEY_CTX_new_from_pkey", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
@@ -74,6 +91,16 @@ final class OpenSslEcdh implements NativeEcdh.Backend {
 
     @Override
     public void publicKey(MemorySegment out) {
+        use.readLock().lock();
+        try {
+            checkOpen();
+            publicKeyLocked(out);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private void publicKeyLocked(MemorySegment out) {
         int size = group.publicSize();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment publicKey = arena.allocate(size);
@@ -96,6 +123,16 @@ final class OpenSslEcdh implements NativeEcdh.Backend {
 
     @Override
     public void derive(MemorySegment peer, MemorySegment out) {
+        use.readLock().lock();
+        try {
+            checkOpen();
+            deriveLocked(peer, out);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private void deriveLocked(MemorySegment peer, MemorySegment out) {
         MemorySegment peerKey = importPublic(peer);
         MemorySegment context = NULL;
         try (Arena arena = Arena.ofConfined()) {
@@ -140,6 +177,19 @@ final class OpenSslEcdh implements NativeEcdh.Backend {
 
     @Override
     public void close() {
+        use.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            closeLocked();
+        } finally {
+            use.writeLock().unlock();
+        }
+    }
+
+    private void closeLocked() {
         MemorySegment old = key;
         key = NULL;
         invoke(FREE_KEY, old);

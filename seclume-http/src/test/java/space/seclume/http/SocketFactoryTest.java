@@ -1,6 +1,7 @@
 package space.seclume.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -149,12 +150,40 @@ class SocketFactoryTest {
         }
     }
 
+    /**
+     * Refused, and at once: the half-written request's connection is closed,
+     * so a client that reads for an early answer - OkHttp does - does not wait
+     * out its read timeout first (it did, ten seconds, before the refusal came).
+     */
     @Test
     void anUnknownPlaceholderIsNotSent() {
         OkHttpClient client = okHttp();
         String forged = CredentialPlaceholders.PREFIX + "0000000000000000000000000-1";
-        assertThrows(java.io.IOException.class, () -> call(client, "/bearer", "Authorization",
-                "Bearer " + forged, null));
+        long started = System.nanoTime();
+        java.io.IOException refused = assertThrows(java.io.IOException.class,
+                () -> call(client, "/bearer", "Authorization", "Bearer " + forged, null));
+        long millis = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(refused.getMessage().contains("did not hand out"), refused.toString());
+        assertTrue(millis < 5_000, "the refusal took " + millis + " ms");
+    }
+
+    /**
+     * A placeholder nobody here handed out points at an attack: refused, and
+     * recorded every time as a JFR event - kind, target and the count so
+     * far, never the placeholder.
+     */
+    @Test
+    void anUnknownPlaceholderIsAnEvent() throws Exception {
+        OkHttpClient client = okHttp();
+        String forged = CredentialPlaceholders.PREFIX + "0000000000000000000000000-7";
+        var events = space.seclume.tck.Recorded.during(() -> {
+            assertThrows(java.io.IOException.class,
+                    () -> call(client, "/bearer", "Authorization", "Bearer " + forged, null));
+        }, "space.seclume.PlaceholderRefused");
+        assertEquals(1, events.size(), events.toString());
+        assertEquals("http", events.get(0).getString("kind"));
+        assertTrue(events.get(0).getLong("refused") >= 1);
+        assertFalse(events.get(0).toString().contains(forged), events.get(0).toString());
     }
 
     @Test

@@ -51,7 +51,9 @@ class DiscoveryTest {
             Map.entry("url-password", "postgresql://app:" + alnum(18) + "@db.internal:5432/app"),
             Map.entry("url-password-parameter", "jdbc:sqlserver://db;user=app;password="
                     + alnum(16)),
-            Map.entry("http-authorization", "Authorization: Basic " + base64(24)));
+            Map.entry("http-authorization", "Authorization: Basic " + base64(24)),
+            Map.entry("http-credential-value", "Basic " + Base64.getEncoder().encodeToString(
+                    ("svc:" + alnum(18)).getBytes(StandardCharsets.US_ASCII))));
 
     private static String base64(int bytes) {
         byte[] raw = new byte[bytes];
@@ -196,6 +198,36 @@ class DiscoveryTest {
                 // a version string with a Vault-like prefix but too short
                 "hvs.short"), Set.of(), Discovery.CHUNK);
         assertTrue(result.clean(), "found: " + result.valuesByDetector());
+    }
+
+    /**
+     * The value of an Authorization header held without its name - Apache's
+     * BasicHeader, the JDK's HttpClient, Spring's HttpHeaders. Basic only where
+     * it decodes to user:password, Bearer from twenty characters; a header
+     * with its name is the other detector's, and counted once.
+     */
+    @Test
+    void aCredentialWithoutItsHeaderNameIsFound() {
+        String password = alnum(18);
+        String basic = Base64.getEncoder().encodeToString(("svc:" + password)
+                .getBytes(StandardCharsets.US_ASCII));
+        for (String form : List.of("Basic " + basic, "basic " + basic,
+                "Bearer " + alnum(32))) {
+            assertEquals(Set.of("http-credential-value"),
+                    detectors(Discovery.scan(dump("ASCII", form), Set.of())), form);
+        }
+        assertEquals(Set.of("http-authorization"),
+                detectors(Discovery.scan(dump("ASCII", "Authorization: Basic " + basic),
+                        Set.of())), "a header with its name is found once");
+        for (String prose : List.of("basic test of the connection pool settings",
+                "Basic " + Base64.getEncoder().encodeToString(new byte[] {1, 2, 3, 4, 5, 6, 7,
+                        8, 9, 10, 11, 12, 13, 14, 15}),
+                "Basic " + Base64.getEncoder().encodeToString("no colon in this value at all"
+                        .getBytes(StandardCharsets.US_ASCII)),
+                "Bearer shorttoken12345")) {
+            assertEquals(Set.of(), detectors(Discovery.scan(dump("ASCII", prose), Set.of())),
+                    prose);
+        }
     }
 
     @Test

@@ -146,6 +146,13 @@ public final class AwsInstanceRole {
         if (parsed.getHost() == null || parsed.getHost().isBlank()) {
             throw new IllegalArgumentException("container-uri has no host: " + uri);
         }
+        if (!"http".equalsIgnoreCase(parsed.getScheme())) {
+            // The scheme was ignored: an https:// endpoint was asked in plain
+            // HTTP. Plain HTTP to the metadata addresses is what this does;
+            // anything else is refused rather than quietly downgraded.
+            throw new IllegalArgumentException("container-uri is asked over plain HTTP, to a "
+                    + "link-local or loopback address only - not " + parsed.getScheme() + "://");
+        }
         return new AwsInstanceRole(() -> fetchContainer(parsed, tokenFile, timeoutMillis));
     }
 

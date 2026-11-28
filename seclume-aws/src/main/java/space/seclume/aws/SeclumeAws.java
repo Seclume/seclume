@@ -72,6 +72,12 @@ public final class SeclumeAws {
      * ones ({@code credentials=instance}, {@code container} or
      * {@code web-identity}) - which need a synchronous client, whose HTTP
      * client is then seclume's TLS carrying the session token.
+     *
+     * <p>With temporary credentials this <b>replaces</b> an HTTP client set on
+     * the builder before - its timeouts, proxy and connection pool with it: the
+     * token has to be written by seclume's TLS, which only its own client does.
+     * Set timeouts on the SDK's override configuration instead. A long-term key
+     * leaves the HTTP client as it is.
      */
     public static <B extends AwsClientBuilder<B, ?>> B configure(B builder, String spec) {
         Settings settings = Settings.of(spec);

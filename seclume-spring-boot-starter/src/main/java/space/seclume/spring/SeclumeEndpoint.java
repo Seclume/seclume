@@ -38,6 +38,20 @@ public final class SeclumeEndpoint {
 
     private final List<SeclumePool> pools;
 
+    /**
+     * How long what a connection told about itself - login, TLS, the
+     * server's certificate and capacity - is shown again without asking: a
+     * dashboard polling the endpoint every second took a connection from each
+     * pool every second, away from the application. The pool's own numbers
+     * are always current.
+     */
+    static final java.time.Duration FACTS_FOR = java.time.Duration.ofSeconds(10);
+
+    private record Facts(long until, Map<String, Object> shown) {
+    }
+
+    private final Map<SeclumePool, Facts> facts = new java.util.concurrent.ConcurrentHashMap<>();
+
     public SeclumeEndpoint(List<SeclumePool> pools) {
         this.pools = List.copyOf(pools);
     }
@@ -52,13 +66,19 @@ public final class SeclumeEndpoint {
             sources.put(statistics.name(), describe(pool, statistics));
         }
         report.put("dataSources", sources);
+        // What weakens the defaults - the start-up line's list, here too, where
+        // a dashboard or a check asks rather than a log being read.
+        List<String> weakened = SeclumeWeakenedSettingsAutoConfiguration.found();
+        if (weakened != null) {
+            report.put("weakenedSettings", weakened);
+        }
         if (KeyCertificates.PRESENT) {
             report.put("certificates", KeyCertificates.describe(java.time.Instant.now()));
         }
         return report;
     }
 
-    private static Map<String, Object> describe(SeclumePool pool, PoolStatistics statistics) {
+    private Map<String, Object> describe(SeclumePool pool, PoolStatistics statistics) {
         Map<String, Object> source = new LinkedHashMap<>();
         Map<String, Object> numbers = new LinkedHashMap<>();
         numbers.put("active", statistics.active());
@@ -66,6 +86,23 @@ public final class SeclumeEndpoint {
         numbers.put("total", statistics.total());
         numbers.put("waiting", statistics.waiting());
         source.put("pool", numbers);
+        Facts known = facts.get(pool);
+        if (known != null && !space.seclume.internal.Deadlines.passed(known.until())) {
+            source.putAll(known.shown());
+            return source;
+        }
+        Map<String, Object> asked = ask(pool, statistics);
+        if (!asked.containsKey("error")) {
+            facts.put(pool, new Facts(space.seclume.internal.Deadlines.after(FACTS_FOR),
+                    java.util.Collections.unmodifiableMap(asked)));
+        }
+        source.putAll(asked);
+        return source;
+    }
+
+    /** What a connection of {@code pool} says about itself - one borrowed for it. */
+    private static Map<String, Object> ask(SeclumePool pool, PoolStatistics statistics) {
+        Map<String, Object> source = new LinkedHashMap<>();
         try (Connection connection = pool.getConnection()) {
             Secured secured = Secured.of(connection);
             source.put("authentication", secured.authenticationMethod());
@@ -73,6 +110,7 @@ public final class SeclumeEndpoint {
             source.put("tls", tls == null ? "none - the connection is in the clear" : tls);
             X509Certificate certificate = secured.serverCertificate();
             source.put("assessment", SeclumeAssessment.of(secured.authenticationMethod(), tls,
+                    secured.serverAuthenticated(),
                     certificate == null ? null : certificate.getNotAfter().toInstant(), statistics, pool.settings().getMaximumPoolSize(),
                     pool.resetsRefused(), java.time.Instant.now()).asMap());
             if (certificate != null) {
@@ -91,7 +129,8 @@ public final class SeclumeEndpoint {
                 source.put("serverCapacity", server);
             }
         } catch (SQLException | RuntimeException e) {
-            source.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+            source.put("error", e instanceof SQLException sql ? SeclumePoolHealth.outward(sql)
+                    : e.getClass().getSimpleName());
         }
         return source;
     }

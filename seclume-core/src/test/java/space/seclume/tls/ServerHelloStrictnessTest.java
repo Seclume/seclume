@@ -248,7 +248,7 @@ class ServerHelloStrictnessTest {
     void withoutSupportedVersionsTheServerDidNotChooseThirteen() {
         Peer peer = new Peer(id -> serverHello(id, p256Share(), false));
         TlsVersionRefused refused = assertThrows(TlsVersionRefused.class,
-                () -> ClientHandshake.connect(peer, "db.example.com", null, null, null,
+                () -> ClientHandshake.connectWithoutAuthenticating(peer, "db.example.com", null, null,
                         ClientHello.Offer.TLS13));
         assertEquals(TlsAlertException.PROTOCOL_VERSION,
                 ((TlsProtocolException) refused.getCause()).alert());

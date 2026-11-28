@@ -56,8 +56,21 @@ public final class SubjectKeys implements AutoCloseable {
 
     private final FieldKeys ring;
     private final SubjectKeyStore store;
+    /** How often each subject was shredded, to tell a ring opened across a shred; guarded by this. */
+    private final java.util.Map<String, Long> shreds = new java.util.HashMap<>();
     private final int cached;
     private final LinkedHashMap<String, FieldKeys> rings;
+    /** When each cached ring was read from the store (System.nanoTime()); guarded by this. */
+    private final java.util.Map<String, Long> readAt = new java.util.HashMap<>();
+    /** {@link #MAX_AGE_NANOS} for this instance - a test lowers it for its own. */
+    private long maxAgeNanos = MAX_AGE_NANOS;
+    /**
+     * How long a cached ring is trusted: a shred on another node - the key gone
+     * from the shared store - reaches this one when its ring is read again. It
+     * was cached until evicted, which on a busy subject is never.
+     */
+    static final long MAX_AGE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(
+            Long.getLong("seclume.subjectKeys.maxAgeSeconds", 60));
     private boolean closed;
 
     private SubjectKeys(FieldKeys ring, SubjectKeyStore store, int cached) {
@@ -68,6 +81,7 @@ public final class SubjectKeys implements AutoCloseable {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, FieldKeys> eldest) {
                 if (size() > SubjectKeys.this.cached) {
+                    readAt.remove(eldest.getKey());
                     eldest.getValue().close();
                     return true;
                 }
@@ -84,7 +98,8 @@ public final class SubjectKeys implements AutoCloseable {
         for (FieldKeys open : rings.values()) {
             open.close();
         }
-        rings.clear();
+        rings.clear(); // mutation-equivalent: with readAt cleared a kept ring is read again, and a second close changes nothing
+        readAt.clear(); // mutation-equivalent: with the rings cleared a time without its ring is never read, and is overwritten
     }
 
     /** Subject keys wrapped by {@code ring}, kept in {@code store}, the last 1000 used cached. */
@@ -141,13 +156,25 @@ public final class SubjectKeys implements AutoCloseable {
      */
     public boolean shred(String subject) {
         check(subject);
-        synchronized (this) {
-            FieldKeys open = rings.remove(subject);
-            if (open != null) {
-                open.close();
-            }
+        forget(subject);
+        boolean had = store.delete(subject);
+        // Once more after the delete: a reader that came between the first
+        // forget and the delete found no cached ring, loaded the key that was
+        // still stored, and - the count already raised - cached it, so that
+        // every read after the shred opened again. Raised again here, its ring
+        // is refused if it is not cached yet, and dropped if it is.
+        forget(subject);
+        return had;
+    }
+
+    /** Wipes the subject's cached ring, and makes a ring being opened meanwhile not cached. */
+    private synchronized void forget(String subject) {
+        shreds.merge(subject, 1L, Long::sum);
+        FieldKeys open = rings.remove(subject);
+        readAt.remove(subject);
+        if (open != null) {
+            open.close();
         }
-        return store.delete(subject);
     }
 
     private FieldKeys ring(String subject, boolean create) {
@@ -158,8 +185,18 @@ public final class SubjectKeys implements AutoCloseable {
             }
             FieldKeys open = rings.get(subject);
             if (open != null) {
-                return open;
+                Long at = readAt.get(subject);
+                if (at != null && System.nanoTime() - at < maxAgeNanos) { // mutation-equivalent: the boundary is one nanosecond wide
+                    return open;
+                }
+                rings.remove(subject);               // read again: it may be shredded elsewhere
+                readAt.remove(subject);
+                open.close();
             }
+        }
+        long seen;
+        synchronized (this) {
+            seen = shreds.getOrDefault(subject, 0L);
         }
         byte[] context = subject.getBytes(StandardCharsets.UTF_8); // seclume-allow: a subject's name, not a secret
         EncryptedColumn wrapping = ring.column(WRAPPING, Mode.RANDOMIZED);
@@ -194,12 +231,20 @@ public final class SubjectKeys implements AutoCloseable {
             subjectRing = FieldKeys.builder().key(SUBJECT_KEY, copyOf(key.secret())).unlisted().build();
         }
         synchronized (this) {
+            if (shreds.getOrDefault(subject, 0L) != seen) {
+                // Shredded while its key was being read: the key in hand is the
+                // one that was deleted, and neither caching nor using it is allowed.
+                subjectRing.close();
+                throw new FieldEncryptionException("the subject " + subject
+                        + " was shredded while its key was being read");
+            }
             FieldKeys raced = rings.get(subject);
             if (raced != null) {
                 subjectRing.close();
                 return raced;
             }
             rings.put(subject, subjectRing);
+            readAt.put(subject, System.nanoTime());
             return subjectRing;
         }
     }
@@ -233,7 +278,8 @@ public final class SubjectKeys implements AutoCloseable {
         for (FieldKeys open : rings.values()) {
             open.close();
         }
-        rings.clear();
+        rings.clear(); // mutation-equivalent: closed refuses every later use before the map is looked at
+        readAt.clear(); // mutation-equivalent: closed refuses every later use before the map is looked at
     }
 
     @Override

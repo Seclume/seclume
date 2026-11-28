@@ -39,7 +39,16 @@ public final class BinaryValues {
                 long value = row.unsignedAt(at, 4);
                 yield unsigned ? value : (int) value;
             }
-            case MyTypes.LONGLONG -> row.unsignedAt(at, 8);
+            case MyTypes.LONGLONG -> {
+                long value = row.unsignedAt(at, 8);
+                if (unsigned && value < 0) {
+                    // A BIGINT UNSIGNED above Long.MAX_VALUE is no long: refused,
+                    // not handed out negative.
+                    throw new space.seclume.internal.jdbc.NumberOutOfRange(
+                            "a BIGINT UNSIGNED out of range for a long");
+                }
+                yield value;
+            }
             case MyTypes.BIT -> bits(row, at, length);
             case MyTypes.FLOAT -> (long) Float.intBitsToFloat((int) row.unsignedAt(at, 4));
             case MyTypes.DOUBLE -> (long) Double.longBitsToDouble(row.unsignedAt(at, 8));

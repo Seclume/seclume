@@ -1,6 +1,7 @@
 package space.seclume.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +32,18 @@ class OAuthLifetimeTest {
         assertEquals(300, lifetime("{\"access_token\":\"x\"}"));
         assertEquals(300, lifetime("{\"expires_in\":\"soon\"}"));
         assertEquals(300, lifetime("{\"expires_in\":null}"));
+    }
+
+    /**
+     * An answer that cannot be read as far as expires_in is broken, not one
+     * without a lifetime: has() used to say "not there", and the token was
+     * kept for the default it was never given.
+     */
+    @Test
+    void anAnswerBrokenBeforeItsLifetimeIsAnError() {
+        assertThrows(RuntimeException.class,
+                () -> lifetime("{\"access_token\":\"x\" \"expires_in\":60}"));
+        assertThrows(RuntimeException.class, () -> lifetime("[\"expires_in\", 60]"));
     }
 
     @Test

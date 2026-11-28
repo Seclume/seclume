@@ -72,7 +72,8 @@ class LocalOracleNneTest {
 
     private static String url(String nativeEncryption) {
         return "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/FREEPDB1?user=seclume_test"
-                + "&provider=file&path=" + password.toString().replace('\\', '/')
+                // Native encryption instead of TLS: a listener without TLS.
+                + "&tls=off&provider=file&path=" + password.toString().replace('\\', '/')
                 + (nativeEncryption == null ? "" : "&nativeEncryption=" + nativeEncryption);
     }
 
@@ -183,7 +184,7 @@ class LocalOracleNneTest {
         String host = System.getProperty("seclume.oracle.host", HOST);
         int port = Integer.getInteger("seclume.oracle.port", 1521);
         String plainUrl = "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1"
-                + "?user=seclume_test&provider=file&path=" + plain.toString().replace('\\', '/')
+                + "?user=seclume_test&tls=off&provider=file&path=" + plain.toString().replace('\\', '/')
                 + "&nativeEncryption=required";
         try (Connection c = DriverManager.getConnection(plainUrl);
              Statement s = c.createStatement();

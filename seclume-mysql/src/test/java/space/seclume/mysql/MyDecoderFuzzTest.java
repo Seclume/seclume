@@ -92,7 +92,9 @@ class MyDecoderFuzzTest {
         byte[] columnCount = packet(1, new byte[] {0x01});
         byte[] longColumn = columnDefinition(2, "n", 0x03);     // MYSQL_TYPE_LONG
         byte[] varchar = columnDefinition(2, "n", 0x0f);        // MYSQL_TYPE_VARCHAR
-        byte[] ok = packet(4, new byte[] {0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+        // CLIENT_DEPRECATE_EOF: the rows end with an OK packet headed 0xfe. One
+        // headed 0x00 is read as another row, and the seed never got an answer.
+        byte[] ok = packet(4, new byte[] {(byte) 0xfe, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
         byte[] eof = packet(4, new byte[] {(byte) 0xfe, 0x00, 0x00, 0x02, 0x00});
         byte[] nullRow = packet(3, new byte[] {(byte) 0xfb});
         byte[] err = packet(1, join(new byte[] {(byte) 0xff, 0x15, 0x04, '#', '2', '8', '0',
@@ -107,6 +109,25 @@ class MyDecoderFuzzTest {
         seeds.put("an eof terminator", join(columnCount, varchar, row(3, "7"), eof));
         seeds.put("an error", err);
         return seeds;
+    }
+
+    /** The seeds that are answers get one: otherwise they only test the end of the stream. */
+    @Test
+    void theSeedsGetAnAnswer() throws Exception {
+        // "an eof terminator" is not among them: the old five-byte EOF where a
+        // session that deprecated it expects an OK - that seed is a refusal.
+        for (String name : java.util.List.of("one integer row", "one text row", "an empty value")) {
+            MySession session = MySession.resume(HostileTransport.of(seeds().get(name)),
+                    CAPABILITIES, 7);
+            try {
+                org.junit.jupiter.api.Assertions.assertNotNull(
+                        session.askOneValue("select n from t"), name);
+            } catch (java.sql.SQLException e) {
+                throw new AssertionError(name + " got no answer", e);
+            } finally {
+                session.close();
+            }
+        }
     }
 
     @Test

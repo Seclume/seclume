@@ -19,13 +19,28 @@ on:
 permissions:
   contents: read
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
   mysql:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00
         env:
           MYSQL_ROOT_PASSWORD: seclume-CI-password-1
           MYSQL_DATABASE: seclume_test
@@ -38,6 +53,8 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -64,6 +81,7 @@ jobs:
       - name: Record what it was
         run: >
           java
+          -Dseclume.secret.providers=file
           -Dbench.url="jdbc:seclume:mysql://127.0.0.1:3306/seclume_test?user=seclume_test&provider=file&path=.local-mysql-password&allowCleartextOverUnverifiedTls=true"
           -cp seclume-bench/target/seclume-bench.jar
           space.seclume.bench.BenchRecord
@@ -99,7 +117,7 @@ jobs:
     timeout-minutes: 60
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_DB: seclume_test
@@ -112,6 +130,8 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -148,7 +168,7 @@ jobs:
     timeout-minutes: 60
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_DB: seclume_test
@@ -161,6 +181,8 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -199,13 +221,15 @@ jobs:
     timeout-minutes: 60
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: seclume-CI-password-1
         ports: ['1433:1433']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -217,7 +241,7 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - name: Wait for SQL Server and create the database
         run: |
-          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f" | head -1)
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b \
                 -P 'seclume-CI-password-1' -Q "if db_id('seclume_test') is null create database seclume_test"; then
@@ -259,8 +283,10 @@ jobs:
             -e APP_USER_PASSWORD=seclume-ci-password \
             --health-cmd healthcheck.sh --health-interval 10s \
             --health-timeout 10s --health-retries 60 \
-            gvenzl/oracle-free:23-slim
+            gvenzl/oracle-free:23-slim@sha256:48a3d9db7fa7c2a2fdbdf5fff7502c93e807349a2d625718fe61668cc3daa844
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin

@@ -38,6 +38,7 @@ final class Pop3Login {
             Pop3Login login = new Pop3Login(wire);
             MailEvents.login("pop3", settings, login::login);
             wire.unguard();
+            wire.loggedIn();
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();
@@ -130,8 +131,8 @@ final class Pop3Login {
             boolean login = step.startsWith("AUTH") || step.equals("PASS") || step.equals("USER");
             throw new MailException(-1, login
                     ? "the server refused the login of " + settings.user + " (" + step + "): "
-                            + reply
-                    : step + " was answered with: " + reply);
+                            + space.seclume.internal.ServerText.printable(reply)
+                    : step + " was answered with: " + space.seclume.internal.ServerText.printable(reply));
         }
     }
 }

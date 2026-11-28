@@ -97,14 +97,17 @@ public final class HeapCheck {
                     null, false);
         }
 
-        /** Where a path of the process's file system is from here. */
+        /**
+         * Where a path of the process's file system is from here: under
+         * {@code /proc/<pid>/root}, with every link on the way resolved inside
+         * that root - see {@link #inRoot}.
+         */
         Path local(Path path) {
             if (!inTarget) {
                 return path;
             }
             Path absolute = path.isAbsolute() ? path : Path.of("/").resolve(path);
-            return Path.of("/proc", pid, "root").resolve(
-                    absolute.getRoot().relativize(absolute).toString());
+            return inRoot(Path.of("/proc", pid, "root"), absolute.getRoot().relativize(absolute));
         }
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
@@ -266,6 +269,15 @@ public final class HeapCheck {
             System.exit(2);
             return;
         }
+        // The JVM writes its dump itself and refuses a path that is taken, so
+        // the file there was deleted first - whatever it was. Refused instead,
+        // as --redact refuses.
+        if (keep != null && Files.exists(keep, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            System.err.println("--keep-dump " + keep + ": the file exists, and a dump "
+                    + "does not replace one");
+            System.exit(2);
+            return;
+        }
         if (redact != null && Files.exists(redact)) {
             System.err.println("--redact " + redact + ": the file exists, and a redaction "
                     + "does not overwrite one");
@@ -371,10 +383,119 @@ public final class HeapCheck {
         return run(new Options(pid, null, List.of(secretFile), List.of(), keep));
     }
 
+    /** Links followed at most, as the kernel does before it gives up (ELOOP). */
+    private static final int MAX_LINKS = 40;
+
+    /**
+     * {@code inside} under {@code root}, resolved as the process sees it.
+     *
+     * <p>Through {@code /proc/<pid>/root} the kernel goes on from a link's
+     * target in this file system, not in the process's: an absolute link the
+     * process placed - a dump at {@code /tmp/d.hprof -> /etc/shadow} - would
+     * have this check read, and delete, a file of the host. So each link on
+     * the way is read here and resolved inside {@code root}: an absolute
+     * target from {@code root}, and {@code ..} never above it - what
+     * {@code openat2(RESOLVE_IN_ROOT)} does. A component that does not exist
+     * yet (the dump before the JVM writes it) ends the resolution; the rest
+     * is taken as it stands.
+     */
+    static Path inRoot(Path root, Path inside) {
+        java.util.ArrayDeque<String> todo = new java.util.ArrayDeque<>();
+        for (Path name : inside) {
+            todo.addLast(name.toString());
+        }
+        List<String> done = new ArrayList<>();
+        int links = 0;
+        while (!todo.isEmpty()) {
+            String name = todo.pollFirst();
+            if (name.isEmpty() || name.equals(".")) {
+                continue;
+            }
+            if (name.equals("..")) {
+                if (!done.isEmpty()) {
+                    done.remove(done.size() - 1);
+                }
+                continue;
+            }
+            Path candidate = join(root, done).resolve(name);
+            if (!Files.isSymbolicLink(candidate)) {
+                done.add(name);
+                if (!Files.exists(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    done.addAll(todo);
+                    break;
+                }
+                continue;
+            }
+            if (++links > MAX_LINKS) {
+                throw new IllegalArgumentException("more than " + MAX_LINKS + " links on the "
+                        + "way to " + inside + " in the process's file system");
+            }
+            Path target;
+            try {
+                target = Files.readSymbolicLink(candidate);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            if (target.isAbsolute() || target.toString().startsWith("/")) {
+                done.clear();
+            }
+            List<String> parts = new ArrayList<>();
+            for (Path part : target) {
+                parts.add(part.toString());
+            }
+            for (int i = parts.size() - 1; i >= 0; i--) {
+                todo.addFirst(parts.get(i));
+            }
+        }
+        return join(root, done);
+    }
+
+    private static Path join(Path root, List<String> names) {
+        Path joined = root;
+        for (String name : names) {
+            joined = joined.resolve(name);
+        }
+        return joined;
+    }
+
     static int run(Options options) {
+        // --in-target: the process's files opened by the kernel inside its
+        // root, never by a path walked here first - see RootedFiles.
+        RootedFiles rooted = null;
+        if (options.inTarget()) {
+            try {
+                rooted = RootedFiles.of(options.pid());
+            } catch (IOException e) {
+                System.err.println("cannot open the file system of process " + options.pid()
+                        + " - " + e.getMessage());
+                return 2;
+            }
+        }
+        try {
+            return run(options, rooted);
+        } finally {
+            if (rooted != null) {
+                rooted.close();
+            }
+        }
+    }
+
+    private static int run(Options options, RootedFiles rooted) {
         List<Secret> secrets = new ArrayList<>();
         for (Path file : options.secretFiles()) {
-            Secret secret = Secret.read(file, options.local(file));
+            Path from;
+            try {
+                from = rooted != null ? rooted.open(file) : options.local(file);
+            } catch (IOException e) {
+                System.err.println("cannot read " + file + " - " + e.getMessage());
+                return 2;
+            }
+            if (from == null) {
+                System.err.println("cannot read " + file + " - it is not there in the file "
+                        + "system of process " + options.pid());
+                return 2;
+            }
+            Secret secret = Secret.read(file, from);
             if (secret == null) {
                 return 2;
             }
@@ -383,6 +504,8 @@ public final class HeapCheck {
 
         boolean takesDump = options.dumpFile() == null;
         Path dump = null;
+        Path pendingDump = null;
+        boolean notShared = false;
         try {
             AuditReport.Target target;
             if (takesDump) {
@@ -403,11 +526,49 @@ public final class HeapCheck {
                 } else {
                     writtenAs = Files.createTempFile("seclume-heapcheck-", ".hprof");
                 }
-                dump = options.local(writtenAs);
-                Files.deleteIfExists(dump);       // the JVM insists on writing it itself
+                if (!options.inTarget() && options.keep() == null && options.dumpDir() == null
+                        && otherFileSystem(options.pid())) {
+                    // The process writes the dump into its own temporary directory: it
+                    // would not be found here, the check would fail - and the dump,
+                    // with everything the process holds, would stay there. (With
+                    // --dump-dir or --keep-dump the path may be a volume both share.)
+                    Files.deleteIfExists(writtenAs);
+                    System.err.println("process " + options.pid() + " sees another file "
+                            + "system than this check (another container): its dump would "
+                            + "be written there and not be found here. Run with --in-target, "
+                            + "which reads it through /proc/" + options.pid() + "/root and "
+                            + "deletes it there");
+                    return 2;
+                }
+                pendingDump = writtenAs;
+                // The JVM insists on writing the dump itself.
+                if (rooted != null) {
+                    rooted.delete(writtenAs);
+                } else {
+                    dump = options.local(writtenAs);
+                    Files.deleteIfExists(dump);
+                }
                 System.out.println("asking process " + options.pid() + " for a heap dump ...");
                 ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), writtenAs);
                 target = new AuditReport.Target(options.pid(), jvm, null);
+                if (rooted != null) {
+                    dump = rooted.open(writtenAs);
+                    if (dump == null) {
+                        System.err.println("process " + options.pid() + " wrote no dump at "
+                                + writtenAs + " in its file system; nothing was checked");
+                        return 2;
+                    }
+                }
+                if (options.dumpDir() != null
+                        && !Files.exists(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    // --dump-dir names a directory both are meant to share; one
+                    // that is not shared left the dump in the process's file
+                    // system, and "could not check ... NoSuchFile" said nothing
+                    // of where it went.
+                    System.err.println(notSharedMessage(options.pid(), writtenAs, dump));
+                    notShared = true;
+                    return 2;
+                }
             } else {
                 dump = options.dumpFile();
                 if (!Files.isRegularFile(dump)) {
@@ -416,7 +577,19 @@ public final class HeapCheck {
                 }
                 target = new AuditReport.Target(null, null, dump.toString());
             }
-            long size = Files.size(dump);
+            // The process could put a link where its dump was written; read
+            // through /proc/<pid>/root it would lead into this file system.
+            // (Opened in the process's root, it is checked already, and read by
+            // its descriptor - a link here that leads to the file itself.)
+            if (rooted == null
+                    && !Files.isRegularFile(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                System.err.println("the heap dump at " + dump + " is not a regular file - a link "
+                        + "or something else was put in its place; nothing was read");
+                return 2;
+            }
+            long size = rooted != null ? Files.size(dump) : Files.readAttributes(dump,
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS).size();
             // A recording holds the environment, the system properties and the
             // command line: what is named secret there is looked for as well.
             boolean recording = !takesDump && Recordings.isRecording(dump);
@@ -424,6 +597,14 @@ public final class HeapCheck {
             if (recording) {
                 Recordings.secretSettings(dump).forEach((label, value) -> recorded.add(
                         new Secret(label + " (in the recording)", value.strip(), null)));
+            }
+            if (secrets.isEmpty() && recorded.isEmpty() && !options.discover()) {
+                // Nothing to look for: "not found" would be true of anything, and
+                // exit 0 would pass a gate that checked nothing.
+                System.err.println("the recording names no secret - no environment variable, "
+                        + "system property or argument named like one - and none was given: "
+                        + "name one with --secret-file or --secret-dir, or add --discover");
+                return 2;
             }
             System.out.println((recording ? "recording is " : "dump is ")
                     + size / (1024 * 1024) + " MB, searching for "
@@ -465,8 +646,17 @@ public final class HeapCheck {
                     : options.dumpFile()) + " - " + e.getMessage());
             return 2;
         } finally {
-            if (takesDump && options.keep() == null && dump != null) {
+            if (rooted != null) {
+                if (takesDump && pendingDump != null) {
+                    deleteInRoot(rooted, pendingDump);
+                }
+            } else if (takesDump && options.keep() == null && dump != null) {
                 deleteQuietly(dump);
+                boolean deletedThere = leftInProcess(options.pid(), pendingDump, dump);
+                if (notShared && deletedThere) {
+                    System.err.println("the dump was deleted in process " + options.pid()
+                            + "'s file system");
+                }
             } else if (takesDump && dump != null) {
                 System.out.println();
                 System.out.println("the dump was kept at " + dump
@@ -562,7 +752,9 @@ public final class HeapCheck {
             for (var finding : secret.findings()) {
                 String holder = "raw file".equals(finding.source())
                         ? report.holderAt(finding.position()) : null;
-                System.out.println("  " + finding + (holder == null ? "" : " - held by " + holder));
+                // A holder is a class and a field name from the dump - whoever wrote it chose them.
+                System.out.println("  " + finding + (holder == null ? ""
+                        : " - held by " + space.seclume.internal.ServerText.printable(holder)));
             }
         }
         if (report.discovery() != null) {
@@ -577,7 +769,8 @@ public final class HeapCheck {
                         + where + ", " + found.count() + " time(s):");
                 for (Discovery.Occurrence at : found.occurrences()) {
                     String holder = report.holderAt(at.position());
-                    System.out.println("  " + at + (holder == null ? "" : " - held by " + holder));
+                    System.out.println("  " + at + (holder == null ? ""
+                            : " - held by " + space.seclume.internal.ServerText.printable(holder)));
                 }
             }
         }
@@ -686,6 +879,65 @@ public final class HeapCheck {
             return InetAddress.getLocalHost().getHostName();
         } catch (IOException e) {
             return "unknown";
+        }
+    }
+
+    /**
+     * Whether the process sees another file system than this one: Linux, and
+     * its mount namespace differs. False where that cannot be told.
+     */
+    static boolean otherFileSystem(String pid) {
+        try {
+            Path mine = Path.of("/proc/self/ns/mnt");
+            Path its = Path.of("/proc", pid, "ns", "mnt");
+            return Files.exists(mine) && Files.exists(its)
+                    && !Files.readSymbolicLink(mine).equals(Files.readSymbolicLink(its));
+        } catch (IOException | UnsupportedOperationException | SecurityException unknown) {
+            return false;
+        }
+    }
+
+    /**
+     * The dump as the process wrote it, if it is not the file deleted here -
+     * a process whose file system changed under the check - deleted there, or
+     * named as left behind.
+     */
+    private static boolean leftInProcess(String pid, Path writtenAs, Path deletedHere) {
+        if (writtenAs == null || pid == null || !otherFileSystem(pid)) {
+            return false;
+        }
+        Path absolute = writtenAs.toAbsolutePath();
+        Path there = Path.of("/proc", pid, "root").resolve(
+                absolute.getRoot().relativize(absolute).toString());
+        if (there.equals(deletedHere)) {
+            return false;
+        }
+        // Inside the process's root, by the kernel: a link the process put on
+        // the way must not lead the deletion into this file system.
+        try (RootedFiles rooted = RootedFiles.of(pid)) {
+            return rooted.delete(writtenAs);
+        } catch (IOException e) {
+            System.err.println("process " + pid + " wrote its dump to " + writtenAs + " in its "
+                    + "own file system, and it could not be deleted - delete it by hand, it "
+                    + "contains everything the process had in memory");
+            return false;
+        }
+    }
+
+    /** What a --dump-dir that is not shared with the process is reported as. */
+    static String notSharedMessage(String pid, Path writtenAs, Path lookedFor) {
+        return "process " + pid + " wrote its dump to " + writtenAs + ", and it is not at "
+                + lookedFor + " here: --dump-dir has to be a directory this check and the "
+                + "process share (the same volume mounted in both), or run with --in-target, "
+                + "which reads the dump through /proc/" + pid + "/root. Nothing was checked";
+    }
+
+    private static void deleteInRoot(RootedFiles rooted, Path dump) {
+        try {
+            rooted.delete(dump);
+        } catch (IOException e) {
+            System.err.println("could not delete " + dump + " in the process's file system - "
+                    + "delete it by hand, it contains everything the process had in memory");
         }
     }
 

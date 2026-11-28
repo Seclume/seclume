@@ -148,6 +148,36 @@ class BlindIndexTest {
         }
     }
 
+    /**
+     * An exact and a prefix(3) index of the same column are independent: on
+     * 16-bit indexes, a value's two terms agree about once in 65,536 - over a
+     * thousand values a handful at most, not a correlation one could read.
+     * Values sharing their first three characters share the prefix term and
+     * still differ in the exact one.
+     */
+    @Test
+    void anExactAndAPrefixIndexAreIndependent() {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            BlindIndex exact = keys.blindIndex("customer.name", 16, Transform.EXACT);
+            BlindIndex prefix = keys.blindIndex("customer.name", 16, Transform.prefix(3));
+            int agree = 0;
+            Set<Long> exactTerms = new HashSet<>();
+            for (int i = 0; i < 1000; i++) {
+                MemorySegment value = text("name-" + i);
+                long e = exact.term(value);
+                long p = prefix.term(value);
+                exactTerms.add(e);
+                if (e == p) {
+                    agree++;
+                }
+                assertEquals(prefix.term(text("nam")), p, "a prefix(3) term of 'name-" + i + "'");
+            }
+            assertTrue(agree <= 3, agree + " of 1000 values had the same term in both indexes");
+            assertTrue(exactTerms.size() > 980, "the exact terms collide too often: "
+                    + exactTerms.size() + " distinct of 1000");
+        }
+    }
+
     @Test
     void duringARotationBothKeysAreSearched() {
         byte[] stored;

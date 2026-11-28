@@ -76,7 +76,7 @@ class OpenTelemetryMetricsTest {
     private static AnnotationConfigApplicationContext context(boolean enabled) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("seclume.datasources.main.url", "jdbc:seclume:postgresql://"
-                + TestHosts.postgres() + ":" + TestHosts.postgresPort() + "/seclume_test");
+                + TestHosts.postgres() + ":" + TestHosts.postgresPort() + "/seclume_test?tls=prefer");
         properties.put("seclume.datasources.main.username", "seclume_test");
         properties.put("seclume.datasources.main.secret.provider", "file");
         properties.put("seclume.datasources.main.secret.path",

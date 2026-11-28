@@ -204,6 +204,11 @@ public final class NsChannel implements AutoCloseable {
         return tls == null ? null : tls.description();
     }
 
+    /** Whether the server was authenticated, see {@code Secured.serverAuthenticated}; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return tls == null ? null : tls.serverAuthenticated();
+    }
+
     /**
      * Sends the CONNECT packet and reads the answer.
      *

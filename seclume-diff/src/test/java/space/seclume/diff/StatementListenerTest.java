@@ -99,7 +99,7 @@ class StatementListenerTest {
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", ""));
+                        ".local-oracle-password", "&tls=off"));
     }
 
     @ParameterizedTest(name = "{0}")

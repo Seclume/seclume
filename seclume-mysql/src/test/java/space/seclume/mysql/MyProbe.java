@@ -29,7 +29,8 @@ public final class MyProbe {
 
         FileSecretProvider provider = new FileSecretProvider(secretFile, 256);
         MySession.Settings settings = new MySession.Settings(
-                "127.0.0.1", port, "testdb", "seclume_test", provider);
+                "127.0.0.1", port, "testdb", "seclume_test", provider).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)
+                .allowingLegacyHash();               // the stand-in: native, no TLS
 
         List<String> results = new ArrayList<>();
         for (int i = 0; i < cycles; i++) {

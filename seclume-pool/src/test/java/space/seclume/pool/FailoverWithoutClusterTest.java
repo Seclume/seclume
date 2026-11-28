@@ -92,7 +92,7 @@ class FailoverWithoutClusterTest {
                         ".local-mssql-password", "&trustServerCertificate=true",
                         "select @@spid"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "",
+                        ".local-oracle-password", "&tls=off",
                         "select sys_context('userenv', 'sid') from dual"));
     }
 

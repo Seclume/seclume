@@ -3,6 +3,7 @@ package space.seclume.oracle;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -12,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
@@ -157,6 +159,59 @@ class LocalLogInAgainTest {
         }
     }
 
+    /**
+     * With autoCommit on the driver rolls nothing back at the reset, and the
+     * logoff commits what is open. What can be open then: a PL/SQL block or a
+     * CALL - DML inside - is committed by the server at once (the flag covers
+     * it); a query cannot change data (ORA-14551); a SELECT ... FOR UPDATE
+     * opens a transaction that holds locks and nothing else. So the logoff
+     * commits no data a borrower left, and the locks go with the old session.
+     * Measured here rather than assumed (review, row P12).
+     */
+    @Test
+    void anAutoCommitSessionLeavesNoDataOpenAndTheLocksGoWithIt() throws Exception {
+        String url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
+                + "?tls=off&user=seclume_test&provider=file&path="
+                + password.toString().replace(java.io.File.separatorChar, '/');
+        String open = "select nvl(dbms_transaction.local_transaction_id, '-') from dual";
+        try (Connection c = java.sql.DriverManager.getConnection(url);
+             Connection other = java.sql.DriverManager.getConnection(url)) {
+            try (Statement s = c.createStatement()) {
+                s.execute("delete from zl_again_rows");
+                s.execute("insert into zl_again_rows values (1)");
+                s.execute("begin insert into zl_again_rows values (11); end;");
+                assertEquals("-", ask(c, open), "a PL/SQL block left its DML open");
+                assertEquals("2", ask(other, "select to_char(count(*)) from zl_again_rows"));
+                s.execute("call dbms_output.put_line('x')");
+                assertEquals("-", ask(c, open), "a CALL left a transaction open");
+                s.execute("create or replace function zl_again_dml return number is begin "
+                        + "insert into zl_again_rows values (5); return 1; end;");
+                SQLException noDml = assertThrows(SQLException.class,
+                        () -> s.executeQuery("select zl_again_dml from dual").close());
+                assertTrue(noDml.getMessage().contains("ORA-14551"), noDml.getMessage());
+                assertEquals("-", ask(c, open), "a refused query left a transaction open");
+                s.executeQuery("select n from zl_again_rows for update").close();
+            }
+            assertNotEquals("-", ask(c, open), "FOR UPDATE opened no transaction - the test "
+                    + "would prove nothing");
+            try (Statement s = other.createStatement()) {
+                assertThrows(SQLException.class, () -> s.executeQuery(
+                        "select n from zl_again_rows for update nowait").close(),
+                        "the lock was not held");
+            }
+
+            SessionReset reset = c.unwrap(SessionReset.class);
+            assertTrue(reset.resetSessionState());
+            reset.settleReset();
+
+            assertEquals("-", ask(c, open), "the new session inherited a transaction");
+            try (Statement s = other.createStatement()) {
+                s.executeQuery("select n from zl_again_rows for update nowait").close();
+            }
+            assertEquals("2", ask(other, "select to_char(count(*)) from zl_again_rows"));
+        }
+    }
+
     /** Parsed statements belonged to the old session; the new one parses them again. */
     @Test
     void statementsRunAsBeforeAfterwards() throws Exception {
@@ -178,7 +233,7 @@ class LocalLogInAgainTest {
     @Test
     void thePoolsResetIsALoginOnTheSameConnection() throws Exception {
         String url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace(java.io.File.separatorChar, '/');
         try (Connection c = java.sql.DriverManager.getConnection(url)) {
             SessionReset reset = c.unwrap(SessionReset.class);

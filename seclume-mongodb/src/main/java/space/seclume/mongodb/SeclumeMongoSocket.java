@@ -14,6 +14,7 @@ import java.security.Principal;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.sql.SQLException;
+import java.util.List;
 
 import javax.net.ssl.HandshakeCompletedListener;
 import javax.net.ssl.SSLParameters;
@@ -26,6 +27,7 @@ import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.TlsStack;
+import space.seclume.mongodb.internal.MemberHosts;
 import space.seclume.mongodb.internal.MongoHandshake;
 
 /**
@@ -129,6 +131,22 @@ final class SeclumeMongoSocket extends SSLSocket {
     private void open(InetSocketAddress inet, int connectTimeout) throws IOException {
         String host = inet.getHostString();
         int port = inet.getPort();
+        // The official driver connects to every member a hello names, and
+        // this socket logs in to each: one compromised member or an
+        // rs.reconfig could bring in any host with a valid public certificate
+        // and collect the SCRAM proof, the AWS signature or the OIDC token.
+        // The driver hands over an address it resolved itself, and its host
+        // string can be a reverse lookup's name: a seed written as an address
+        // is matched by the address.
+        List<String> seeds = MemberHosts.seedsOf(url.driverConnectionString());
+        String literal = inet.getAddress() == null ? null : inet.getAddress().getHostAddress();
+        if (!MemberHosts.mayJoin(host, seeds, MemberHosts.EXTRA_ALLOWED)
+                && (literal == null || !seeds.contains(literal))) {
+            throw new IOException("not connecting to " + host + ":" + port + ": it is outside "
+                    + "the domains of the seeds " + seeds + ", and a member announced there "
+                    + "would get the login. -Dseclume.mongodb.allowedHosts=<suffix> admits a "
+                    + "domain where it belongs");
+        }
         int effectiveTimeout = connectTimeout > 0 ? connectTimeout : url.connectTimeout();
 
         try {

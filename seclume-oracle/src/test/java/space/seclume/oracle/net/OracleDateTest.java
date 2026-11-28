@@ -28,7 +28,7 @@ class OracleDateTest {
         "76c70c1f010101,      1899-12-31 00:00:00",
         "78640117012c3b,      2000-01-23 00:43:58",
     })
-    void readsTheSevenBytes(String hex, String expected) {
+    void readsTheSevenBytes(String hex, String expected) throws java.sql.SQLException {
         String bytes = hex;
         try (WireBuffer in = new WireBuffer(32)) {
             for (int i = 0; i + 1 < bytes.length(); i += 2) {
@@ -40,7 +40,7 @@ class OracleDateTest {
 
     /** A timestamp appends four bytes of nanoseconds. */
     @Test
-    void readsTheFractionOfATimestamp() {
+    void readsTheFractionOfATimestamp() throws java.sql.SQLException {
         try (WireBuffer in = new WireBuffer(32)) {
             for (int value : new int[] {0x78, 0x7e, 0x01, 0x02, 0x04, 0x05, 0x06,
                                         0x07, 0x5b, 0xca, 0x00}) {

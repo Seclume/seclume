@@ -711,7 +711,7 @@ public final class TtcResult {
 
     /** What the server wrote about the error, or {@code null}. */
     public String errorText() {
-        return errorText;
+        return space.seclume.internal.ServerText.printable(errorText);
     }
 
     /** The number the server reported; 1403 means "no more rows". */

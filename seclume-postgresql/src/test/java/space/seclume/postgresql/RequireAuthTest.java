@@ -34,6 +34,8 @@ import space.seclume.secret.CallbackSecretProvider;
  * before anything of the answer is sent - against a fake server that asks for
  * exactly that method and records what comes back.
  */
+// Counts the open secret scopes of the whole JVM: another test running beside it moves the count.
+@org.junit.jupiter.api.parallel.Isolated
 class RequireAuthTest {
 
     private static final int OK = 0;
@@ -87,10 +89,171 @@ class RequireAuthTest {
         try (ServerSocket listener = listener()) {
             CompletableFuture<Integer> answer = serve(listener, MD5);
             SQLException failed = assertThrows(SQLException.class,
-                    () -> PgSession.open(settings(listener.getLocalPort(), "!password")));
+                    // md5 over a line without TLS: allowed here, the question is requireAuth.
+                    () -> PgSession.open(settings(listener.getLocalPort(), "!password")
+                            .allowingLegacyHash()));
             assertTrue(failed.getMessage().contains("password authentication failed"),
                     failed.getMessage());
             assertEquals('p', answer.get(10, TimeUnit.SECONDS), "the md5 answer was not sent");
+        }
+    }
+
+    /**
+     * md5 is md5(md5(password || user) || salt) for a salt the server chose:
+     * a server in the middle of unverified TLS - here, of no TLS - takes the
+     * answer and guesses against a fast hash. Refused unless
+     * allowLegacyHashOverUnverifiedTls says otherwise, and nothing is sent.
+     */
+    @Test
+    void md5OverAnUnverifiedLineIsRefused() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Integer> answer = serve(listener, MD5);
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> PgSession.open(settings(listener.getLocalPort(), null)));
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("allowLegacyHashOverUnverifiedTls"),
+                    refused.getMessage());
+            assertEquals(-1, answer.get(10, TimeUnit.SECONDS), "an md5 answer went out");
+        }
+    }
+
+    /**
+     * A ReadyForQuery in place of any login: it ended the login as a success,
+     * so neither requireAuth nor SCRAM's server signature was ever checked -
+     * anybody in the middle under tls=prefer was taken for the database.
+     */
+    @Test
+    void aReadyForQueryWithoutAnyLoginIsRefused() throws Exception {
+        for (String requireAuth : new String[] {"scram-sha-256", null}) {
+            try (ServerSocket listener = listener()) {
+                CompletableFuture<Void> served = CompletableFuture.runAsync(() -> {
+                    try (Socket socket = listener.accept();
+                         DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                        OutputStream out = socket.getOutputStream();
+                        in.readNBytes(in.readInt() - 4);             // the startup message
+                        out.write('Z');
+                        writeInt(out, 5);
+                        out.write('I');
+                        out.flush();
+                        in.read();                                   // until the client goes
+                    } catch (IOException gone) {
+                        // the client hung up - what it should do
+                    }
+                });
+                SQLException refused = assertThrows(SQLException.class,
+                        () -> PgSession.open(settings(listener.getLocalPort(), requireAuth)).close(),
+                        "requireAuth=" + requireAuth);
+                // Refused at the login, not found out later by a statement
+                // that times out against a server with nothing behind it.
+                assertEquals("28000", refused.getSQLState(), refused.getMessage());
+                assertTrue(refused.getMessage().contains("before AuthenticationOk"),
+                        refused.getMessage());
+                served.get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    /**
+     * SCRAM begun and skipped: the server asks for SCRAM-SHA-256, takes the
+     * client's first message and answers ReadyForQuery, twice - never the
+     * server's proof. Refused with 28000, and the password's memory is given
+     * back: no secret scope is left open after the refusal.
+     */
+    @Test
+    void scramBegunAndSkippedIsRefusedAndTheSecretWiped() throws Exception {
+        long before = space.seclume.secret.SecretScope.open();
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Boolean> served = CompletableFuture.supplyAsync(() -> {
+                try (Socket socket = listener.accept();
+                     DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                    OutputStream out = socket.getOutputStream();
+                    in.readNBytes(in.readInt() - 4);                 // the startup message
+                    byte[] mechanisms = "SCRAM-SHA-256\0\0".getBytes(StandardCharsets.US_ASCII);
+                    out.write('R');
+                    writeInt(out, 8 + mechanisms.length);
+                    writeInt(out, 10);                               // AuthenticationSASL
+                    out.write(mechanisms);
+                    out.flush();
+                    if (in.read() != 'p') {
+                        return false;
+                    }
+                    in.readNBytes(in.readInt() - 4);                 // the client-first message
+                    for (int i = 0; i < 2; i++) {
+                        out.write('Z');
+                        writeInt(out, 5);
+                        out.write('I');
+                    }
+                    out.flush();
+                    in.read();
+                    return true;
+                } catch (IOException gone) {
+                    return true;
+                }
+            });
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> PgSession.open(settings(listener.getLocalPort(), null)).close());
+            assertTrue(served.get(10, TimeUnit.SECONDS), "the client sent no SCRAM message");
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("before AuthenticationOk"),
+                    refused.getMessage());
+        }
+        assertEquals(before, space.seclume.secret.SecretScope.open(),
+                "a secret scope was left open after the refused login");
+    }
+
+    /**
+     * Kerberos begun and skipped: the server asks for GSSAPI, takes the first
+     * token and then answers ReadyForQuery - or AuthenticationOk - without the
+     * reply that proves it is the service the ticket was for. Needs a GSSAPI
+     * that makes a first token here; without one the login fails before the
+     * skip, and the test says so instead of passing.
+     */
+    @Test
+    void kerberosBegunAndSkippedIsRefused() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(space.seclume.internal.Gssapi.available(),
+                "no GSSAPI on this machine");
+        for (char skip : new char[] {'Z', 'R'}) {
+            try (ServerSocket listener = listener()) {
+                CompletableFuture<Boolean> served = CompletableFuture.supplyAsync(() -> {
+                    try (Socket socket = listener.accept();
+                         DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                        OutputStream out = socket.getOutputStream();
+                        in.readNBytes(in.readInt() - 4);             // the startup message
+                        out.write('R');
+                        writeInt(out, 8);
+                        writeInt(out, 7);                            // AuthenticationGSS
+                        out.flush();
+                        if (in.read() != 'p') {
+                            return false;                            // no token came
+                        }
+                        in.readNBytes(in.readInt() - 4);             // the first token
+                        if (skip == 'R') {
+                            out.write('R');                          // AuthenticationOk
+                            writeInt(out, 8);
+                            writeInt(out, 0);
+                        }
+                        for (int i = 0; i < 2; i++) {
+                            out.write('Z');
+                            writeInt(out, 5);
+                            out.write('I');
+                        }
+                        out.flush();
+                        in.read();
+                        return true;
+                    } catch (IOException gone) {
+                        return true;                 // the client hung up - what it should do
+                    }
+                });
+                SQLException refused = assertThrows(SQLException.class,
+                        () -> PgSession.open(settings(listener.getLocalPort(), null)).close());
+                if (!served.get(10, TimeUnit.SECONDS)) {
+                    org.junit.jupiter.api.Assumptions.abort("no first Kerberos token here (no "
+                            + "ticket or KDC): " + refused.getMessage());
+                }
+                assertEquals("28000", refused.getSQLState(), refused.getMessage());
+                assertTrue(refused.getMessage().contains(skip == 'Z' ? "before AuthenticationOk"
+                        : "before mutual authentication was complete"), refused.getMessage());
+            }
         }
     }
 

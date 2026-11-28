@@ -30,8 +30,11 @@ import space.seclume.field.FieldKeys;
  *
  * <p>A value written under one {@code name} does not open under another. A
  * value read back from a key it was not written for does: Lettuce's codec does
- * not hand the key to {@code decodeValue}, so binding a value to its key is not
- * possible here - use different names for data that must not be swapped.
+ * not hand the key to {@code decodeValue}, so whoever can write to Redis can
+ * copy one key's value under another, and it is read there as that key's own.
+ * Where the key matters - a balance, a role - write the value with
+ * {@link #encodeValueFor} and read it with {@link #decodeValueFor}: it is
+ * bound to its key and refused under any other.
  */
 public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
 
@@ -42,8 +45,11 @@ public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
 
     private EncryptedCodec(RedisCodec<K, V> inner, FieldKeys ring, String name, boolean encryptKeys) {
         this.inner = inner;
-        this.values = ring.column("redis." + name + ".value", Mode.RANDOMIZED);
-        this.keys = encryptKeys ? ring.column("redis." + name + ".key", Mode.DETERMINISTIC) : null;
+        // Every value is bound to the codec's name; the columns refuse one without it.
+        this.values = ring.column("redis." + name + ".value", Mode.RANDOMIZED,
+                EncryptedColumn.Context.REQUIRED);
+        this.keys = encryptKeys ? ring.column("redis." + name + ".key", Mode.DETERMINISTIC,
+                EncryptedColumn.Context.REQUIRED) : null;
         this.context = ("redis:" + name).getBytes(StandardCharsets.UTF_8); // seclume-allow: a name, not a secret
     }
 
@@ -115,5 +121,42 @@ public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
             plain.fill((byte) 0);
             return out;
         }
+    }
+
+    /**
+     * A value bound to the key it is stored under: the key's bytes join the
+     * associated data, so a ciphertext copied to another key no longer opens.
+     * RedisCodec cannot do this - encodeValue never sees the key.
+     */
+    public ByteBuffer encodeValueFor(K key, V value) {
+        return encryptBound(values, inner.encodeValue(value), boundContext(key));
+    }
+
+    /** {@link #encodeValueFor}'s counterpart: refuses a value stored under another key. */
+    public V decodeValueFor(K key, ByteBuffer stored) {
+        byte[] bytes = new byte[stored.remaining()];
+        stored.duplicate().get(bytes);
+        byte[] aad = boundContext(key);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment plain = arena.allocate(Math.max(1, values.plaintextLength(bytes)));
+            int length = values.decrypt(bytes, aad, plain);
+            ByteBuffer out = ByteBuffer.wrap(plain.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE));
+            plain.fill((byte) 0);
+            return inner.decodeValue(out);
+        }
+    }
+
+    private byte[] boundContext(K key) {
+        ByteBuffer k = inner.encodeKey(key);
+        byte[] aad = new byte[context.length + 1 + k.remaining()];
+        System.arraycopy(context, 0, aad, 0, context.length);
+        k.duplicate().get(aad, context.length + 1, k.remaining());
+        return aad;
+    }
+
+    private ByteBuffer encryptBound(EncryptedColumn column, ByteBuffer plain, byte[] aad) {
+        byte[] bytes = new byte[plain.remaining()];
+        plain.duplicate().get(bytes);
+        return ByteBuffer.wrap(column.encrypt(MemorySegment.ofArray(bytes), aad));
     }
 }

@@ -31,7 +31,8 @@ import space.seclume.crypto.HashAlgorithm;
 class RecordProtectionEdgesTest {
 
     private static final int TAG = 16;
-    private static final int MAX_INNER = 16384 + 256 - TAG;
+    /** RFC 8446 section 5.4: TLSInnerPlaintext - content, type, padding - is at most 2^14 + 1. */
+    private static final int MAX_INNER = 16384 + 1;
 
     private static MemorySegment secret(Arena arena) {
         MemorySegment s = arena.allocate(32);

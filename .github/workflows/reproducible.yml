@@ -1,0 +1,129 @@
+name: Release rebuild
+
+# Every release is built again here, from its tag, and each jar compared byte
+# for byte with the one on Maven Central. The release itself is built and
+# signed on the maintainer's machine; this run is what lets anybody check that
+# what Central serves is what the tagged source makes. Only a jar that
+# matches gets a SLSA build provenance attestation - which then speaks for
+# the file on Central too, since it is the same digest.
+#
+# Started when the GitHub release is published - after the deploy, so the jars
+# are on Central by then, or soon: the download is retried for a while - and
+# by hand for any earlier tag.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: the release tag to rebuild, e.g. v0.15.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Check the tag's form
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "not a release tag: $TAG"; exit 1 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          # No cache: a rebuild that vouches for a release starts from nothing
+          # another run could have left behind.
+      - name: Build the tag as the release is built
+        # -Prelease adds sources and javadoc; the signature is the
+        # maintainer's and is not made here.
+        run: ./mvnw -B -Prelease -DskipTests -Dgpg.skip=true package
+      - name: Compare every jar with Maven Central
+        id: compare
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          base="https://repo1.maven.org/maven2/space/seclume"
+          compared=0; differ=0
+          : > matched.txt
+          {
+            echo "## $TAG rebuilt and compared with Maven Central"
+            echo
+            echo "| Artifact | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for jar in */target/*-"$version".jar */target/*-"$version"-sources.jar */target/*-"$version"-javadoc.jar; do
+            [ -f "$jar" ] || continue
+            module="${jar%%/*}"
+            name="$(basename "$jar")"
+            url="$base/$module/$version/$name"
+            got=""
+            for attempt in 1 2 3 4 5 6; do
+              status=$(curl -sS -o central.jar -w '%{http_code}' "$url" || echo 000)
+              if [ "$status" = 200 ]; then got=yes; break; fi
+              if [ "$status" = 404 ] && [ "$attempt" -ge 2 ]; then break; fi
+              sleep 60
+            done
+            if [ -z "$got" ]; then
+              echo "| \`$name\` | not on Central (not published, or not yet) |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            compared=$((compared + 1))
+            ours=$(sha256sum "$jar" | cut -d' ' -f1)
+            theirs=$(sha256sum central.jar | cut -d' ' -f1)
+            if [ "$ours" = "$theirs" ]; then
+              echo "| \`$name\` | same: \`$ours\` |" >> "$GITHUB_STEP_SUMMARY"
+              echo "$jar" >> matched.txt
+            else
+              differ=$((differ + 1))
+              echo "| \`$name\` | **differs**: built \`$ours\`, Central \`$theirs\` |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          rm -f central.jar
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "$compared compared, $differ differ." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$compared" -eq 0 ]; then
+            echo "nothing of $TAG was found on Central"; exit 1
+          fi
+          if [ "$differ" -gt 0 ]; then
+            echo "$differ jar(s) of $TAG differ from what Central serves"; exit 1
+          fi
+          # The subjects of the attestation: the jars that matched, and no other.
+          {
+            echo "subjects<<END_OF_SUBJECTS"
+            cat matched.txt
+            echo "END_OF_SUBJECTS"
+          } >> "$GITHUB_OUTPUT"
+      - name: Attest the build provenance of the matching jars
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.compare.outputs.subjects }}

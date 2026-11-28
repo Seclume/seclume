@@ -1,6 +1,7 @@
 package space.seclume.pool;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,7 +70,7 @@ class SessionResetTest {
                         "exec sp_set_session_context 'tenant_id', '42'",
                         "select cast(session_context(N'tenant_id') as varchar(10))", null),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
-                        + "?user=seclume_test", ".local-oracle-password",
+                        + "?tls=off&user=seclume_test", ".local-oracle-password",
                         "select sys_context('USERENV', 'SESSIONID') from dual",
                         "begin dbms_session.set_identifier('42'); end;",
                         "select sys_context('USERENV', 'CLIENT_IDENTIFIER') from dual", null));
@@ -174,6 +175,279 @@ class SessionResetTest {
                 assertNotEquals(session, ask(c, unique),
                         "the altered session was lent again");
                 assertNotEquals("2026", ask(c, "select to_char(sysdate) from dual"));
+            }
+        }
+    }
+
+    /**
+     * A transaction left open on return is rolled back, on every database: the
+     * next borrower neither sees the row nor runs inside the transaction.
+     * SQL Server's reset (RESETCONNECTION) is the case the review asked about.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void anOpenTransactionIsRolledBackOnReturn(Db db) throws Exception {
+        String table = db.name().equals("SQL Server") ? "dbo.seclume_open_tx" : "seclume_open_tx";
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                try {
+                    execute(c, "drop table " + table);
+                } catch (SQLException absent) {
+                    // not there yet
+                }
+                execute(c, "create table " + table + " (id int)");
+            }
+            try (Connection c = pool.getConnection()) {
+                c.setAutoCommit(false);
+                execute(c, "insert into " + table + " values (1)");
+                // returned without commit or rollback
+            }
+            try (Connection c = pool.getConnection()) {
+                assertTrue(c.getAutoCommit(), "the next borrower got auto-commit off");
+                assertEquals("0", ask(c, "select count(*) from " + table),
+                        "the uncommitted row survived the return");
+                if (db.name().equals("SQL Server")) {
+                    assertEquals("0", ask(c, "select @@trancount"),
+                            "the next borrower runs inside the open transaction");
+                }
+                execute(c, "drop table " + table);
+            }
+        }
+    }
+
+    /**
+     * A transaction begun by a statement with auto-commit on - the driver does
+     * not know of it - is not lent on, and the next borrower is not the one
+     * who finds out: their first statement works, the row is not there, and
+     * they are not inside a transaction.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void aTransactionBegunBehindTheDriversBackIsNotLentOn(Db db) throws Exception {
+        String begin = switch (db.name()) {
+            case "PostgreSQL" -> "begin";
+            case "MySQL" -> "start transaction";
+            case "SQL Server" -> "begin transaction";
+            default -> null;                          // Oracle has no BEGIN statement
+        };
+        org.junit.jupiter.api.Assumptions.assumeTrue(begin != null, "no explicit BEGIN");
+        String table = db.name().equals("SQL Server") ? "dbo.seclume_begun_tx" : "seclume_begun_tx";
+        PoolSettings settings = settings();
+        settings.setMaximumPoolSize(1);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings)) {
+            try (Connection c = pool.getConnection()) {
+                try {
+                    execute(c, "drop table " + table);
+                } catch (SQLException absent) {
+                    // not there yet
+                }
+                execute(c, "create table " + table + " (id int)");
+            }
+            long refusedBefore = pool.resetsRefused();
+            try (Connection c = pool.getConnection()) {
+                assertTrue(c.getAutoCommit());
+                execute(c, begin);
+                execute(c, "insert into " + table + " values (1)");
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals("0", ask(c, "select count(*) from " + table),
+                        "the row of the begun transaction reached the next borrower");
+                if (db.name().equals("SQL Server")) {
+                    assertEquals("0", ask(c, "select @@trancount"));
+                }
+                execute(c, "drop table " + table);
+            }
+            if (db.name().equals("PostgreSQL")) {
+                // DISCARD ALL cannot run in a transaction block: the reset is
+                // refused and the session replaced, not lent with the block open.
+                assertEquals(1, pool.resetsRefused() - refusedBefore);
+            }
+        }
+    }
+
+    /**
+     * SQL Server: EXECUTE AS without REVERT must not hand the next borrower
+     * the impersonated user, and an application role set without a cookie -
+     * which no reset can undo - must not either.
+     */
+    @Test
+    void sqlServerImpersonationDoesNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(2);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String self;
+            try (Connection c = pool.getConnection()) {
+                self = ask(c, "select user_name()");
+                execute(c, "execute as user = 'guest'");
+                assertEquals("guest", ask(c, "select user_name()"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(self, ask(c, "select user_name()"),
+                        "the next borrower runs as the impersonated user");
+            }
+        }
+    }
+
+    /**
+     * MySQL: what COM_RESET_CONNECTION is relied on to put back - the active
+     * roles, sql_mode and the connection's character set - is put back for
+     * the next borrower. A role is set only where the test user has one to
+     * set; the rest everywhere.
+     */
+    @Test
+    void mysqlRolesModeAndCharsetDoNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(1);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String role;
+            String mode;
+            String charset;
+            boolean roleSet;
+            try (Connection c = pool.getConnection()) {
+                role = ask(c, "select current_role()");
+                mode = ask(c, "select @@session.sql_mode");
+                charset = ask(c, "select @@session.character_set_client");
+                // Without STRICT_TRANS_TABLES MySQL truncates silently, and with
+                // ANSI_QUOTES "x" is a name: what one borrower sets changes the
+                // meaning of the next one's SQL.
+                execute(c, "set @@session.sql_mode = 'ANSI_QUOTES'");
+                execute(c, "set names latin1");
+                try {
+                    execute(c, "create role if not exists seclume_reset_role");
+                    execute(c, "grant select on seclume_test.* to seclume_reset_role");
+                    execute(c, "grant seclume_reset_role to current_user()");
+                } catch (SQLException noPrivilege) {
+                    // the test user may not make roles: one it has already, or none
+                }
+                roleSet = !ask(c, "select count(*) from information_schema.applicable_roles "
+                        + "where role_name = 'seclume_reset_role'").equals("0");
+                if (roleSet) {
+                    // By name: MariaDB knows no SET ROLE ALL.
+                    execute(c, "set role seclume_reset_role");
+                    assertTrue(!java.util.Objects.equals(role, ask(c, "select current_role()")),
+                            "set role all changed nothing - the role check would prove nothing");
+                }
+                System.out.println("MYSQL ROLE PATH " + roleSet);
+                assertEquals("ANSI_QUOTES", ask(c, "select @@session.sql_mode"));
+                assertEquals("latin1", ask(c, "select @@session.character_set_client"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(mode, ask(c, "select @@session.sql_mode"),
+                        "the next borrower got the last one's sql_mode");
+                assertEquals(charset, ask(c, "select @@session.character_set_client"),
+                        "the next borrower got the last one's character set");
+                assertEquals(role, ask(c, "select current_role()"),
+                        "the next borrower got the last one's roles");
+            }
+        }
+    }
+
+    @Test
+    void sqlServerApplicationRoleDoesNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(2);
+        // A throwaway role in a throwaway database: its password is no secret.
+        String role = "seclume_approle";
+        String secret = "Ap9-" + java.util.UUID.randomUUID();
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String self;
+            try (Connection c = pool.getConnection()) {
+                execute(c, "if database_principal_id('" + role + "') is not null "
+                        + "drop application role " + role);
+                execute(c, "create application role " + role + " with password = '" + secret + "'");
+            }
+            try (Connection c = pool.getConnection()) {
+                self = ask(c, "select user_name()");
+                execute(c, "exec sp_setapprole '" + role + "', '" + secret + "'");
+                assertEquals(role, ask(c, "select user_name()"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(self, ask(c, "select user_name()"),
+                        "the next borrower runs as the application role");
+                execute(c, "drop application role " + role);
+            }
+        }
+    }
+
+    /** Whether {@code sql} runs - a table that is there - or fails because it is not. */
+    private static boolean runs(Connection c, String sql) {
+        try {
+            ask(c, sql);
+            return true;
+        } catch (SQLException missing) {
+            return false;
+        }
+    }
+
+    /**
+     * A temporary table a borrower made - a session's own, where it may have
+     * put the last tenant's rows - is gone for the next borrower of the same
+     * connection.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void aTemporaryTableDoesNotReachTheNextBorrower(Db db) throws Exception {
+        String[] table = switch (db.name()) {
+            case "PostgreSQL" -> new String[] {"create temp table seclume_tmp (x int)",
+                "select count(*) from seclume_tmp"};
+            case "MySQL" -> new String[] {"create temporary table seclume_tmp (x int)",
+                "select count(*) from seclume_tmp"};
+            case "SQL Server" -> new String[] {"create table #seclume_tmp (x int)",
+                "select count(*) from #seclume_tmp"};
+            default -> new String[] {"create private temporary table ora$ptt_seclume (x number) "
+                + "on commit preserve definition", "select count(*) from ora$ptt_seclume"};
+        };
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                execute(c, table[0]);
+                assertTrue(runs(c, table[1]), "the borrower cannot see its own table");
+            }
+            try (Connection c = pool.getConnection()) {
+                assertFalse(runs(c, table[1]), "the next borrower sees the temporary table");
+            }
+        }
+    }
+
+    /**
+     * An advisory lock a borrower took is the session's, not the
+     * transaction's: kept, the next borrower held it without knowing, and
+     * everyone else waited for it. After the return another session gets it.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void anAdvisoryLockIsReleasedOnReturn(Db db) throws Exception {
+        String[] lock = switch (db.name()) {
+            case "PostgreSQL" -> new String[] {"select pg_advisory_lock(4711)",
+                "select pg_try_advisory_lock(4711)", "select pg_advisory_unlock(4711)"};
+            case "MySQL" -> new String[] {"select get_lock('seclume_lock', 0)",
+                "select get_lock('seclume_lock', 0)", "select release_lock('seclume_lock')"};
+            case "SQL Server" -> new String[] {"declare @r int; exec @r = sp_getapplock "
+                + "@Resource = 'seclume_lock', @LockMode = 'Exclusive', @LockOwner = 'Session', "
+                + "@LockTimeout = 0; select @r",
+                "declare @r int; exec @r = sp_getapplock @Resource = 'seclume_lock', "
+                + "@LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0; "
+                + "select case when @r >= 0 then 1 else 0 end",
+                "exec sp_releaseapplock @Resource = 'seclume_lock', @LockOwner = 'Session'"};
+            default -> null;
+        };
+        Assumptions.assumeTrue(lock != null, "Oracle's DBMS_LOCK needs a grant the test user "
+                + "does not have; its sessions are replaced on return anyway");
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings());
+             SeclumePool other = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                ask(c, lock[0]);
+                // The control: while it is held, another session does not get it.
+                try (Connection elsewhere = other.getConnection()) {
+                    String got = ask(elsewhere, lock[1]);
+                    assertTrue("0".equals(got) || "f".equals(got) || "false".equalsIgnoreCase(got),
+                            "the lock was not taken - the test would prove nothing: " + got);
+                }
+            }
+            try (Connection c = pool.getConnection()) {
+                ask(c, "select 1" + (db.name().equals("Oracle") ? " from dual" : ""));
+            }
+            try (Connection elsewhere = other.getConnection()) {
+                String got = ask(elsewhere, lock[1]);
+                assertTrue("1".equals(got) || "t".equals(got) || "true".equalsIgnoreCase(got),
+                        "another session cannot take the lock the returned borrower held: " + got);
+                execute(elsewhere, lock[2]);
             }
         }
     }

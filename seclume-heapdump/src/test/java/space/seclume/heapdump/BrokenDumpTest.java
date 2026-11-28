@@ -68,8 +68,11 @@ class BrokenDumpTest {
     void mutatedDumpsEndInAResultOrAnIoException() throws IOException {
         byte[] base = dump();
         Random random = new Random(Long.getLong("seclume.hprof.fuzz.seed", 20261030L));
-        Path file = directory.resolve("mutated.hprof");
         for (int round = 0; round < ROUNDS; round++) {
+            // A file of its own each round: on Windows a file still mapped by
+            // the round before - the mapping goes with the GC - cannot be
+            // written again.
+            Path file = directory.resolve("mutated-" + round + ".hprof");
             byte[] mutated = base.clone();
             for (int i = 0; i < 1 + random.nextInt(4) && mutated.length > 0; i++) {
                 int at = random.nextInt(mutated.length);

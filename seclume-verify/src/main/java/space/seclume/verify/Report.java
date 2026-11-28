@@ -46,7 +46,10 @@ final class Report {
     }
 
     void line(String key, String value) {
-        text.append("  ").append(pad(key)).append(value).append('\n');
+        // The text goes to a terminal, and much of it the server said - a
+        // version, a setting, an error. The JSON escapes it as JSON.
+        text.append("  ").append(pad(key))
+                .append(space.seclume.internal.ServerText.printable(value)).append('\n');
         facts.add(new String[] {key, value});
         if (sections.isEmpty()) {
             // A line before any title. Nothing writes one today; a report

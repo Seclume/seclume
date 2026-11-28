@@ -49,7 +49,7 @@ class NoKeyOnTheHeapTest {
             try (SeclumeJwt jwt = SeclumeJwt.of("HS256?provider=file&path="
                     + slashes(directory.resolve("hmac-key")))) {
                 for (int i = 0; i < 3; i++) {
-                    String token = jwt.sign(Map.of("sub", "user-" + i));
+                    String token = jwt.sign(Map.of("sub", "user-" + i, "exp", 4_102_444_800L));
                     assertTrue(jwt.verify(token).contains("user-" + i));
                 }
             }

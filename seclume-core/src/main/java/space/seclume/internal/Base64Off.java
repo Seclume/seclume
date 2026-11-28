@@ -82,10 +82,22 @@ public final class Base64Off {
         long out = targetOffset;
         int accumulator = 0;
         int bits = 0;
+        int characters = 0;
+        int padding = 0;
         for (int i = 0; i < length; i++) {
             int c = byteAt(source, offset + i) & 0xff;
             if (c == '=') {
-                break;
+                padding++;
+                continue;
+            }
+            if (padding > 0) {
+                if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+                    continue;
+                }
+                // Text after the padding was dropped without a word: two keys
+                // in one file were read as the first.
+                throw new IllegalArgumentException("base64 continues after its padding, at "
+                        + "position " + i);
             }
             int value = value(c);
             if (value < 0) {
@@ -97,11 +109,23 @@ public final class Base64Off {
                         "not a base64 character at position " + i);
             }
             accumulator = (accumulator << 6) | value;
+            characters++;
             bits += 6;
             if (bits >= 8) {
                 bits -= 8;
                 setByte(target, out++, (byte) (accumulator >>> bits));
             }
+        }
+        // The last unit as java.util.Base64 takes it: one character is no
+        // byte, padding has to fill the unit exactly, and the bits the last
+        // character carries beyond its bytes are zero.
+        int last = characters % 4;
+        if (last == 1 || (padding > 0 && last + padding != 4) || padding > 2) {
+            throw new IllegalArgumentException("base64 of " + characters + " characters and "
+                    + padding + " padding is not whole");
+        }
+        if ((accumulator & ((1 << bits) - 1)) != 0) {
+            throw new IllegalArgumentException("base64 with bits set beyond its last byte");
         }
         return (int) (out - targetOffset);
     }

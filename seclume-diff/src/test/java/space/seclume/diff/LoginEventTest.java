@@ -85,7 +85,7 @@ class LoginEventTest {
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true", "login7"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "", "o5logon"));
+                        ".local-oracle-password", "&tls=off", "o5logon"));
     }
 
     @ParameterizedTest(name = "{0}")

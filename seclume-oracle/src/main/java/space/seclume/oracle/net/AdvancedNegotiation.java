@@ -76,6 +76,11 @@ public final class AdvancedNegotiation {
     private static final int INTEGRITY = 3;
     private static final int FIELD_STRING = 0;
     private static final int FIELD_BYTES = 1;
+    /** The Diffie-Hellman groups taken: 1024 to 4096 bits. */
+    private static final int MIN_GROUP_BYTES = 128;
+    private static final int MAX_GROUP_BYTES = 512;
+    /** A 256-bit private exponent - enough for a 128-bit level, and 8 to 16 times cheaper. */
+    private static final int EXPONENT_BYTES = 32;
     private static final int FIELD_UB1 = 2;
     private static final int FIELD_UB2 = 3;
     private static final int FIELD_UB4 = 4;
@@ -256,11 +261,7 @@ public final class AdvancedNegotiation {
             DiffieHellman dh = null;
             space.seclume.internal.Gssapi.Context ntlm = null;
             try {
-                int length = encrypted ? (int) prime.byteSize() : 0;
-                if (encrypted && serverPublic.byteSize() != length) {
-                    throw new IOException("the server's public value has "
-                            + serverPublic.byteSize() + " bytes for a group of " + length);
-                }
+                int length = encrypted ? checkGroup(prime.byteSize(), serverPublic.byteSize()) : 0;
                 byte[] negotiateMessage = null;
                 if (ntsChosen) {
                     ntlm = ntlm();
@@ -273,8 +274,7 @@ public final class AdvancedNegotiation {
                                     + negotiateMessage.length : 0);
                     header(answer, size, (encrypted ? 1 : 0) + (loginChosen ? 1 : 0));
                     if (encrypted) {
-                        dh = DiffieHellman.generate(prime, 0, length, generator, 0,
-                                (int) generator.byteSize(), length);
+                        dh = keyPair(prime, generator);
                         MemorySegment own = arena.allocate(length);
                         dh.publicValue(own, 0);
                         serviceHeader(answer, INTEGRITY, 1);
@@ -527,6 +527,33 @@ public final class AdvancedNegotiation {
             case 12638 -> " (the server could not verify the credentials)";
             default -> "";
         };
+    }
+
+    /**
+     * The server's Diffie-Hellman group, checked before anything is computed
+     * in it: the group is the server's to choose, and so was the cost - the
+     * exponent was as long as the prime, and a 65535-byte prime meant years
+     * of CPU in connect, before any login.
+     *
+     * @return the group's length in bytes
+     */
+    static int checkGroup(long primeBytes, long publicBytes) throws IOException {
+        if (primeBytes < MIN_GROUP_BYTES || primeBytes > MAX_GROUP_BYTES) {
+            throw new IOException("the server's Diffie-Hellman group has " + primeBytes * 8
+                    + " bits; " + MIN_GROUP_BYTES * 8 + " to " + MAX_GROUP_BYTES * 8
+                    + " are accepted");
+        }
+        if (publicBytes != primeBytes) {
+            throw new IOException("the server's public value has " + publicBytes
+                    + " bytes for a group of " + primeBytes);
+        }
+        return (int) primeBytes;
+    }
+
+    /** The client's key pair in a checked group, with a 256-bit private exponent. */
+    static DiffieHellman keyPair(MemorySegment prime, MemorySegment generator) {
+        return DiffieHellman.generate(prime, 0, (int) prime.byteSize(), generator, 0,
+                (int) generator.byteSize(), EXPONENT_BYTES);
     }
 
     private static void header(WireBuffer out, int length, int services) {

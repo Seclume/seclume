@@ -65,6 +65,19 @@ public final class SeclumeConnectionFactoryProvider implements ConnectionFactory
         String host = String.valueOf(options.getRequiredValue(ConnectionFactoryOptions.HOST));
         Object port = options.getValue(ConnectionFactoryOptions.PORT);
         Object database = options.getValue(ConnectionFactoryOptions.DATABASE);
+        // Host, port and database go into the URL as they are - every other
+        // option is encoded. A database of "tenant?user=postgres&x" was a
+        // query of its own: the login name, and any option not set here,
+        // came from whoever chose the database.
+        if (!host.matches("[A-Za-z0-9._\\-:\\[\\],]+")) {
+            throw new IllegalArgumentException("not a host (list): " + host);
+        }
+        if (port != null && !String.valueOf(port).matches("[0-9]{1,5}")) {
+            throw new IllegalArgumentException("not a port: " + port);
+        }
+        if (database != null && !String.valueOf(database).matches("[^?&#/%\\s\\p{Cntrl}]*")) {
+            throw new IllegalArgumentException("a database name holds none of ? & # / % or white space");
+        }
         StringBuilder url = new StringBuilder("jdbc:seclume:")
                 .append(jdbcName(protocol)).append("://").append(host);
         if (port != null) {
@@ -91,13 +104,47 @@ public final class SeclumeConnectionFactoryProvider implements ConnectionFactory
                 continue;
             }
             if (name.equals("options")) {
-                url.append(separator).append(value);
+                url.append(separator).append(checkedOptions(String.valueOf(value)));
             } else {
                 url.append(separator).append(name).append('=').append(encode(value));
             }
             separator = '&';
         }
         return url.toString();
+    }
+
+    /**
+     * The raw query of {@code options}, refused where it names an option
+     * that has a place of its own or decides where a secret comes from or
+     * whom the connection trusts. It was appended as it came, so it could set
+     * provider, path or tls - whatever the PASSED_ON list encodes - from a
+     * string meant for tuning.
+     */
+    static String checkedOptions(String query) {
+        for (String pair : query.split("&")) {
+            if (pair.isEmpty()) {
+                continue;
+            }
+            int equals = pair.indexOf('=');
+            String key = java.net.URLDecoder.decode(equals < 0 ? pair : pair.substring(0, equals),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            String normal = key.replace("-", "").toLowerCase(Locale.ROOT);
+            boolean own = PASSED_ON.stream().anyMatch(name -> name.toLowerCase(Locale.ROOT)
+                    .equals(normal));
+            if (own || normal.startsWith("tls") || normal.startsWith("ssl")
+                    || normal.startsWith("vault") || normal.startsWith("client")
+                    || java.util.Set.of("user", "password", "command", "verify", "url",
+                            "containeruri", "stsendpoint").contains(normal)) {
+                throw new IllegalArgumentException("options may not set " + key
+                        + " - give it as an option of its own");
+            }
+            for (int i = 0; i < pair.length(); i++) {
+                if (pair.charAt(i) < 0x20 || pair.charAt(i) == '#') {
+                    throw new IllegalArgumentException("options holds a control character or #");
+                }
+            }
+        }
+        return query;
     }
 
     @Override

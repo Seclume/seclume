@@ -114,7 +114,10 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      */
     final void underDeadline(String sql, Work body) throws SQLException {
         try (space.seclume.internal.jdbc.Deadline deadline =
-                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow)) {
+                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow,
+                             // A server that ignores the cancellation and trickles
+                             // a byte now and then: closed after the grace.
+                             () -> connection.session().transport().close())) {
             try {
                 body.run();
             } catch (SQLException failed) {

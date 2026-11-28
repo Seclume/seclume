@@ -58,4 +58,27 @@ class EntropySourcesTest {
         }
         return false;
     }
+
+    /**
+     * The last resort - a SecureRandom, where no kernel source answers - gives
+     * fresh bytes each time, and is never what the normal path takes on a
+     * platform that has one.
+     */
+    @Test
+    void theFallbackIsFreshAndNeverTheNormalPath() {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment a = arena.allocate(32);
+            java.lang.foreign.MemorySegment b = arena.allocate(32);
+            Entropy.fillFromSecureRandom(a);
+            Entropy.fillFromSecureRandom(b);
+            org.junit.jupiter.api.Assertions.assertNotEquals(-1L, a.mismatch(b),
+                    "two fallback fills gave the same bytes");
+            long before = Entropy.fallbackUses();
+            for (int i = 0; i < 64; i++) {
+                Entropy.fill(arena.allocate(4096));
+            }
+            org.junit.jupiter.api.Assertions.assertEquals(before, Entropy.fallbackUses(),
+                    "the normal path took the last resort on a platform with a kernel source");
+        }
+    }
 }

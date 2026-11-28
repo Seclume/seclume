@@ -212,6 +212,11 @@ public final class TdsChannel implements AutoCloseable {
         return tls == null ? null : tls.description();
     }
 
+    /** Whether the server was authenticated, see {@code Secured.serverAuthenticated}; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return tls == null ? null : tls.serverAuthenticated();
+    }
+
     // ---- writing ---------------------------------------------------------
 
     /** Starts a message; the header is filled in when it is sent. */
@@ -722,6 +727,12 @@ public final class TdsChannel implements AutoCloseable {
             // did, and what a session object closed after detach() then did to
             // its own successor.
             return;
+        }
+        if (tls != null) {
+            // The TLS layer first: it wipes the traffic keys. Closing only the
+            // socket under it left them in memory nobody freed, for every SQL
+            // Server connection ever closed.
+            tls.close();
         }
         // The transport swallows its own close error - see Transport#close.
         channel.close();

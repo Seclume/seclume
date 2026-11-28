@@ -44,7 +44,7 @@ class OracleValueLobTest {
         try (Connection theirs = DriverManager.getConnection("jdbc:oracle:thin:@//" + host + ":"
                         + port + "/FREEPDB1", JsonFunctionTest.oracleVendor(secret));
              Connection mine = DriverManager.getConnection("jdbc:seclume:oracle://" + host + ":"
-                     + port + "/FREEPDB1?user=seclume_test&provider=file&path="
+                     + port + "/FREEPDB1?tls=off&user=seclume_test&provider=file&path="
                      + TypeCatalogTest.slash(secret))) {
             try (Statement statement = theirs.createStatement()) {
                 statement.execute("drop table if exists " + TABLE);

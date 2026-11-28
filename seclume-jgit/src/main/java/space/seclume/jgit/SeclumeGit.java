@@ -31,7 +31,8 @@ import space.seclume.http.SeclumeSslSocketFactory;
  * HttpTransport.setConnectionFactory(SeclumeGit.connections(""));   // org.eclipse.jgit.transport, once
  * Git.cloneRepository().setURI("https://git.example.com/team/app.git")
  *         .setCredentialsProvider(SeclumeGit.credentials("deploy",
- *                 "provider=file&amp;path=/run/secrets/git-token"))
+ *                 "provider=file&amp;path=/run/secrets/git-token",
+ *                 "https://git.example.com/team/app.git"))
  *         .setDirectory(dir).call();
  * </pre>
  *
@@ -76,10 +77,61 @@ public final class SeclumeGit {
         };
     }
 
-    /** A credentials provider with {@code user} and a placeholder for the secret. */
+    /**
+     * Refused: a credentials provider that names no remote.
+     *
+     * <p>JGit gives the same login to whichever server asks: a submodule's
+     * host from a {@code .gitmodules} someone else wrote, a URL the user
+     * chose. Bound to the first server it was written for, the secret went to
+     * such a server when it asked first. Use
+     * {@link #credentials(String, String, String)}, which names the remote.
+     *
+     * @throws IllegalArgumentException always
+     * @deprecated names no remote; use {@link #credentials(String, String, String)}
+     */
+    @Deprecated(since = "0.15.0", forRemoval = true)
     public static CredentialsProvider credentials(String user, String secretSpec) {
+        throw new IllegalArgumentException("SeclumeGit.credentials(user, spec) names no remote, "
+                + "and JGit gives a login to whichever server asks - a submodule's host among "
+                + "them: use credentials(user, spec, \"https://your.git.host/repo.git\"), which "
+                + "sends the secret to that host only");
+    }
+
+    /**
+     * A credentials provider whose secret goes to {@code remoteUrl}'s host and
+     * port only - {@code https://git.example.com/team/app.git}, port 443 when
+     * the URL names none. Any other server - a submodule's host, a redirect's
+     * - gets the placeholder, and refuses it. A remote on another host needs
+     * a credentials provider of its own.
+     *
+     * <p>Make it once per remote and keep it: each call registers a
+     * placeholder that stays until the process ends.
+     */
+    public static CredentialsProvider credentials(String user, String secretSpec,
+                                                  String remoteUrl) {
         return new UsernamePasswordCredentialsProvider(user,
-                SeclumeSslSocketFactory.placeholder(secretSpec));
+                SeclumeSslSocketFactory.placeholder(secretSpec, List.of(server(remoteUrl))));
+    }
+
+    /** {@code host:port} of an https URL, as the placeholders compare servers. */
+    static String server(String remoteUrl) {
+        java.net.URI uri;
+        try {
+            uri = new java.net.URI(remoteUrl);
+        } catch (java.net.URISyntaxException e) {
+            throw new IllegalArgumentException("not a URL: " + e.getMessage());
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
+            throw new IllegalArgumentException("the remote is an https:// URL with a host, not "
+                    + uri.getScheme() + "://");
+        }
+        String host = uri.getHost();
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        int port = uri.getPort() < 0 ? 443 : uri.getPort();
+        String name = host.indexOf(':') >= 0 ? "[" + host + "]" : host;
+        return name.toLowerCase(java.util.Locale.ROOT) + ":" + port;
     }
 
     /** JGit's view of an {@code HttpsURLConnection} whose sockets are seclume's. */

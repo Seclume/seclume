@@ -139,7 +139,7 @@ class ColumnRotationTest {
             assertEquals(Map.of(2, 23L), after.keys().get("secret"));
             assertEquals(0, after.remaining());
         }
-        try (FieldKeys two = ring(2, new byte[32], KEY2)) {
+        try (FieldKeys two = ring(2, FieldEncryptionTest.otherKey(), KEY2)) {
             // Key 1 replaced by nonsense: everything reads under key 2 alone.
             EncryptedColumn secret = two.column("zl.secret", Mode.RANDOMIZED);
             EncryptedColumn ssn = two.column("zl.ssn", Mode.DETERMINISTIC);
@@ -152,6 +152,70 @@ class ColumnRotationTest {
                             "the deterministic value is the one a search under key 2 finds");
                 }
             }
+        }
+    }
+
+    /**
+     * One value that did not open - tampered with, damaged, under a key no
+     * longer in the ring - stopped the whole rotation with a
+     * FieldEncryptionException. It is left as it is and counted, with its id,
+     * and every other row is rotated.
+     */
+    @Test
+    void aValueThatDoesNotOpenIsCountedNotFatal() throws SQLException {
+        Table table = table(9);
+        byte[] tampered = table.rows.get(4)[0];
+        tampered[tampered.length - 1] ^= 1;                  // the tag no longer fits
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            Progress done = rotation(both, 4, null, null).run(connection(table));
+            assertEquals(1, done.unreadable());
+            assertEquals(List.of(4), done.unreadableIds());
+            assertEquals(9 + 6 - 1, done.rotated(), "the other values were not moved");
+            assertTrue(done.done());
+        }
+    }
+
+    /**
+     * Of many values that do not open, all are counted and the first
+     * IDS_KEPT ids kept - in one batch and over several alike.
+     */
+    @Test
+    void ofManyUnreadableValuesTheFirstHundredIdsAreKept() throws SQLException {
+        for (int batch : new int[] {4, 500}) {
+            Table table = table(120);
+            for (int i = 1; i <= Progress.IDS_KEPT + 1; i++) {
+                byte[] tampered = table.rows.get(i)[0];
+                tampered[tampered.length - 1] ^= 1;
+            }
+            try (FieldKeys both = ring(2, KEY1, KEY2)) {
+                Progress done = rotation(both, batch, null, null).run(connection(table));
+                assertEquals(Progress.IDS_KEPT + 1, done.unreadable(), "batch " + batch);
+                assertEquals(Progress.IDS_KEPT, done.unreadableIds().size(), "batch " + batch);
+            }
+        }
+    }
+
+    /** A count of none under a key is no value under it: the key may go. */
+    @Test
+    void aKeyCountedWithNoValuesMayGo() {
+        ColumnRotation.Census census = new ColumnRotation.Census(
+                Map.of("patient.ssn", Map.of(1, 0L, 2, 5L)), 2);
+        census.requireNoneUnder(1);
+        assertThrows(IllegalStateException.class, () -> census.requireNoneUnder(2));
+    }
+
+    /** A key with values under it was taken out of the ring, and they were lost. */
+    @Test
+    void aKeyWithValuesUnderItIsNotRetired() throws SQLException {
+        Table table = table(6);
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            ColumnRotation rotation = rotation(both, 10, null, null);
+            assertThrows(IllegalStateException.class,
+                    () -> rotation.census(connection(table)).requireNoneUnder(1));
+            assertThrows(IllegalStateException.class,
+                    () -> rotation.census(connection(table)).requireNoneUnder(2), "the primary");
+            rotation.run(connection(table));
+            rotation.census(connection(table)).requireNoneUnder(1);
         }
     }
 

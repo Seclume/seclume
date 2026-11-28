@@ -67,7 +67,7 @@ class CursorReturnTest {
             Assumptions.abort("no Oracle on " + host + ":" + port);
         }
         url = "jdbc:seclume:oracle://" + host + ":" + port + "/" + service
-                + "?user=" + user + "&provider=file&path="
+                + "?tls=off&user=" + user + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

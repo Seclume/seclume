@@ -25,9 +25,11 @@ import org.junit.jupiter.api.Test;
 import space.seclume.tck.TestHosts;
 
 /**
- * {@code patroni=}: the URL names only a server that is gone, and the cluster
- * - a stand-in answering {@code /cluster} as Patroni documents it - says where
- * its leader is now. The connection gets there; without the option it does not.
+ * {@code patroni=}: the cluster - a stand-in answering {@code /cluster} as
+ * Patroni documents it - says which of the URL's servers leads now, and the
+ * connection gets there. It may reorder the URL's servers, not add one: an
+ * answer naming a server the URL does not, over plain HTTP or from an endpoint
+ * taken over, would send the login anywhere.
  */
 class PatroniFailoverTest {
 
@@ -53,12 +55,20 @@ class PatroniFailoverTest {
                 + "\"host\": \"127.0.0.1\", \"port\": 1},"
                 + "{\"name\": \"new\", \"role\": \"leader\", \"state\": \"running\", "
                 + "\"host\": \"" + host + "\", \"port\": " + port + "}]}";
-        String base = "jdbc:seclume:postgresql://127.0.0.1:1/seclume_test?user=seclume_test"
+        String query = "/seclume_test?user=seclume_test"
                 + "&tls=off&connectTimeout=1000&targetServerType=primary&provider=file&path="
                 + password.toString().replace('\\', '/');
+        // The server that is gone has a name no real one has (RFC 2606): with
+        // 127.0.0.1 here, a database on 127.0.0.1 - as in CI - was the same
+        // host to Patroni's check, and the leader was taken as the URL's own.
+        String both = "jdbc:seclume:postgresql://gone.invalid:1," + host + ":" + port + query;
+        String goneOnly = "jdbc:seclume:postgresql://gone.invalid:1" + query;
         try (ServerSocket patroni = serve(cluster)) {
-            try (Connection c = DriverManager.getConnection(base + "&patroni=http://127.0.0.1:"
-                    + patroni.getLocalPort());
+            String asked = "&patroni=http://127.0.0.1:" + patroni.getLocalPort();
+            // The leader is not on the URL: the answer cannot add it.
+            assertThrows(SQLException.class,
+                    () -> DriverManager.getConnection(goneOnly + asked).close());
+            try (Connection c = DriverManager.getConnection(both + asked);
                  Statement s = c.createStatement();
                  ResultSet rows = s.executeQuery("select pg_is_in_recovery()")) {
                 rows.next();
@@ -66,7 +76,61 @@ class PatroniFailoverTest {
             }
         }
         // The control: the URL alone knows only the server that is gone.
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(base).close());
+        assertThrows(SQLException.class, () -> DriverManager.getConnection(goneOnly).close());
+    }
+
+    /**
+     * Patroni names, as the leader, a server the URL does not - one that
+     * listens, and would ask for the password in cleartext. The driver, with
+     * the URL's own server gone, fails; that server never sees a connection,
+     * let alone a password. Runs without a database.
+     */
+    @Test
+    void aLeaderTheUrlDoesNotNameNeverSeesAConnection() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger accepted =
+                new java.util.concurrent.atomic.AtomicInteger();
+        Path secret = Files.createTempFile("patroni-test", ".pw");
+        Files.writeString(secret, "decoy-password-not-real");
+        String provider = "&provider=file&path=" + secret.toString().replace('\\', '/');
+        try (ServerSocket stranger = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            Thread.ofVirtual().start(() -> {
+                while (!stranger.isClosed()) {
+                    try (Socket client = stranger.accept()) {
+                        accepted.incrementAndGet();
+                        // AuthenticationCleartextPassword - what it would ask for
+                        client.getOutputStream().write(new byte[] {'R', 0, 0, 0, 8, 0, 0, 0, 3});
+                        client.getInputStream().read(new byte[4096]);
+                    } catch (IOException closed) {
+                        return;
+                    }
+                }
+            });
+            final String cluster = "{\"members\": [{\"name\": \"rogue\", \"role\": \"leader\", "
+                    + "\"state\": \"running\", \"host\": \"127.0.0.1\", \"port\": "
+                    + stranger.getLocalPort() + "}]}";
+            try (ServerSocket patroni = serve(cluster)) {
+                String url = "jdbc:seclume:postgresql://localhost:1/app?user=app&tls=off"
+                        + "&connectTimeout=1000&targetServerType=primary" + provider
+                        + "&patroni=http://127.0.0.1:" + patroni.getLocalPort();
+                java.util.Properties properties = new java.util.Properties();
+                assertThrows(SQLException.class,
+                        () -> DriverManager.getConnection(url, properties).close());
+            }
+            Thread.sleep(200);
+            assertEquals(0, accepted.get(), "the server only Patroni named got a connection");
+            // The control: with its host on the URL the same member is dialled -
+            // the stand-in is reachable, and the test would see a connection.
+            try (ServerSocket patroni = serve(cluster)) {
+                String url = "jdbc:seclume:postgresql://127.0.0.1:1/app?user=app&tls=off"
+                        + "&connectTimeout=1000&targetServerType=primary" + provider
+                        + "&patroni=http://127.0.0.1:" + patroni.getLocalPort();
+                assertThrows(SQLException.class,
+                        () -> DriverManager.getConnection(url, new java.util.Properties()).close());
+            }
+            assertEquals(true, accepted.get() > 0, "the control did not reach the stand-in");
+        } finally {
+            Files.deleteIfExists(secret);
+        }
     }
 
     /** One resource, answered to every request. */

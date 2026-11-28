@@ -35,13 +35,28 @@ concurrency:
   group: differential-${{ github.ref }}
   cancel-in-progress: true
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
   postgresql:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -54,6 +69,8 @@ jobs:
           --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -63,7 +80,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pg-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       # Only seclume-diff's tests: -am builds the modules it needs, and the
       # filter keeps their own tests - ci.yml's business - from running again.
       - name: seclume against pgjdbc
@@ -84,7 +103,7 @@ jobs:
     timeout-minutes: 60
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00
         env:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
           MYSQL_DATABASE: seclume_test
@@ -96,6 +115,8 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -105,7 +126,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - run: printf '%s' "$S_MY_TEST_PASSWORD" > .local-mysql-password
+        env:
+          S_MY_TEST_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
       - name: Server settings for the procedure tests
         env:
           MYSQL_PWD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -130,13 +153,15 @@ jobs:
     timeout-minutes: 60
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
         ports: ['1433:1433']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -149,9 +174,9 @@ jobs:
       # No health check in the image: creating the database is the first login that has to work.
       - name: Wait for SQL Server and create the test database
         run: |
-          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f" | head -1)
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server container found"; exit 1; fi
-          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_MSSQL_TEST_PASSWORD"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" \
                 -Q "if db_id('seclume_test') is null create database seclume_test"; then
@@ -161,7 +186,11 @@ jobs:
           done
           echo "::error title=sqlserver::SQL Server never accepted a login"
           exit 1
-      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_MSSQL_TEST_PASSWORD" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - name: seclume against mssql-jdbc
         run: >-
           .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test
@@ -190,8 +219,10 @@ jobs:
             -e APP_USER_PASSWORD="$ORA_PASSWORD" \
             --health-cmd healthcheck.sh --health-interval 10s \
             --health-timeout 10s --health-retries 60 \
-            gvenzl/oracle-free:23-slim
+            gvenzl/oracle-free:23-slim@sha256:48a3d9db7fa7c2a2fdbdf5fff7502c93e807349a2d625718fe61668cc3daa844
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'

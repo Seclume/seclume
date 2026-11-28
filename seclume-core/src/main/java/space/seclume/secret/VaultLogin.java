@@ -571,11 +571,11 @@ public final class VaultLogin implements SecretProvider, ExpiringCredentials {
                         + "token");
             }
             fresh.length(length);
-            long ttl = JsonOff.has(answer.segment(), answer.length(), root, "lease_duration")
+            long ttl = JsonOff.present(answer.segment(), answer.length(), root, "lease_duration")
                     ? JsonOff.number(answer.segment(), answer.length(), root, "lease_duration")
                     : 0;
             ttl = Math.max(0, Math.min(ttl, VaultSecretProvider.MAX_LEASE_SECONDS));
-            boolean canRenew = JsonOff.has(answer.segment(), answer.length(), root, "renewable")
+            boolean canRenew = JsonOff.present(answer.segment(), answer.length(), root, "renewable")
                     && JsonOff.bool(answer.segment(), answer.length(), root, "renewable");
 
             SecretScope previous = token;

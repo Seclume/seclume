@@ -92,10 +92,11 @@ public final class RedactionSecrets implements OffHeapSecrets, AutoCloseable {
                 try {
                     secret = SecretScope.fromProvider(entry.getValue());
                 } catch (RuntimeException unavailable) {
-                    LOG.log(System.Logger.Level.WARNING, "seclume: the secret "
-                            + entry.getKey() + " could not be read, so a heap dump is not "
-                            + "searched for it: " + unavailable.getMessage());
-                    continue;
+                    // Fail closed: a dump not searched for a secret is not redacted.
+                    throw new IllegalStateException("seclume: the secret " + entry.getKey()
+                            + " could not be read, so this dump cannot be redacted of it and "
+                            + "is not passed on as redacted: " + unavailable.getMessage(),
+                            unavailable);
                 }
                 scopes.add(secret);
                 if (secret.length() == 0) {

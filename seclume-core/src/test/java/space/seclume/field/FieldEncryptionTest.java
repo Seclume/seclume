@@ -269,7 +269,7 @@ class FieldEncryptionTest {
     @Test
     void anOlderPrimaryCanBeNamed() {
         try (FieldKeys keys = FieldKeys.builder().key(1, provider(KEY))
-                .key(2, provider(new byte[32])).primary(1).build()) {
+                .key(2, provider(otherKey())).primary(1).build()) {
             assertEquals(1, keys.column("t.c", Mode.RANDOMIZED).keyId(
                     keys.column("t.c", Mode.RANDOMIZED).encrypt(text("x"))));
         }
@@ -400,7 +400,7 @@ class FieldEncryptionTest {
     @Test
     void deterministicSealedValuesAreEqualForEqualPlaintexts() {
         try (FieldKeys keys = FieldKeys.builder().key(1, provider(KEY))
-                .key(2, provider(new byte[32])).primary(2).build()) {
+                .key(2, provider(otherKey())).primary(2).build()) {
             EncryptedColumn ssn = keys.column("t.ssn", Mode.DETERMINISTIC);
             assertEquals(ssn.seal(text("1")), ssn.seal(text("1")));
             assertEquals(ssn.seal(text("1")).hashCode(), ssn.seal(text("1")).hashCode());
@@ -443,6 +443,15 @@ class FieldEncryptionTest {
 
     static FieldKeys ring(int id, byte[] key) {
         return FieldKeys.builder().key(id, provider(key)).build();
+    }
+
+    /** A second key, not KEY - and not 32 zeros, which FieldKeys refuses. */
+    static byte[] otherKey() {
+        byte[] key = new byte[32];
+        for (int i = 0; i < key.length; i++) {
+            key[i] = (byte) (0x40 + i);
+        }
+        return key;
     }
 
     /** A key handed over from the test - which holds it on its heap, as a test may. */

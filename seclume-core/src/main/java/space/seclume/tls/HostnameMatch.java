@@ -145,19 +145,25 @@ public final class HostnameMatch {
         if (host.indexOf(':') >= 0) {
             return true;                  // no hostname contains a colon
         }
-        int digits = 0;
+        // Four labels of digits, none of them empty: "1.2.3." has three dots
+        // and is no address - its last label is empty.
         int dots = 0;
+        int label = 0;
         for (int i = 0; i < host.length(); i++) {
             char c = host.charAt(i);
             if (c == '.') {
+                if (label == 0) {
+                    return false;
+                }
                 dots++;
+                label = 0;
             } else if (c >= '0' && c <= '9') {
-                digits++;
+                label++;
             } else {
                 return false;
             }
         }
-        return dots == 3 && digits > 0;
+        return dots == 3 && label > 0;
     }
 
     /**

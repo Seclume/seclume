@@ -75,3 +75,12 @@ Every claim with its test, method, result, limits and platform:
 release gate: CI fails when one of them is missing, skipped or failed, on Linux x86_64 and ARM64
 and on Windows. How the test strategy got here and what it still lacks:
 [TEST-STRATEGY-REPORT.md](TEST-STRATEGY-REPORT.md).
+
+## The JDK underneath
+
+On unpatched JVMs with AVX-512 VBMI, CVE-2026-114938 makes `java.util.Base64`'s decoder - an
+intrinsic - exploitable with crafted input. seclume decodes no Base64 with it any more: a JWT's
+parts, signatures, keys and servers' answers go through its own decoder (`Base64Text`, or
+`Base64Off` into native memory), and a source rule keeps it that way. The application around it
+may still use the JDK's decoder, so run **Java 25.0.5.1 or later** (or your vendor's build with
+the fix). Until the update is in, `-XX:-UseBASE64Intrinsics` turns the intrinsic off.

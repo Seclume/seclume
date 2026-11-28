@@ -53,7 +53,17 @@ class SeclumeEndpointTest {
         settings.setName("orders");
         settings.setMaximumPoolSize(2);
         try (SeclumePool pool = new SeclumePool(new UrlSource(url), settings)) {
-            Map<String, Object> report = new SeclumeEndpoint(List.of(pool)).report();
+            SeclumeEndpoint endpoint = new SeclumeEndpoint(List.of(pool));
+            Map<String, Object> report = endpoint.report();
+            // Asked again at once, by a dashboard: the facts come from before,
+            // no connection is taken from the application for them.
+            long borrowed = pool.statistics().borrowed();
+            for (int i = 0; i < 5; i++) {
+                Map<String, Object> again = endpoint.report();
+                assertTrue(again.toString().contains("TLSv1.3"), again.toString());
+            }
+            org.junit.jupiter.api.Assertions.assertEquals(borrowed, pool.statistics().borrowed(),
+                    "the endpoint borrowed a connection for each call");
             assertTrue(String.valueOf(report.get("version")).matches("\\d+\\.\\d+.*|development"),
                     "no version: " + report.get("version"));
             Map<String, Object> source = (Map<String, Object>)

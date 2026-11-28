@@ -26,6 +26,7 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 | `space.seclume.CredentialRotation` | that a secret was fetched, how long it took, and when it expires |
 | `space.seclume.StatementCache` | whether server-side plans are actually being reused |
 | `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login, Redis `AUTH` through Lettuce, Kafka's SASL PLAIN and OAUTHBEARER, the Elasticsearch and OpenSearch clients |
+| `space.seclume.PlaceholderRefused` | a request carrying a credential placeholder this process never handed out - somebody guessing at or replaying what seclume substitutes: where it was going and how many so far, never the placeholder |
 | `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
 | `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
 | `space.seclume.CertificateRenewal` | a certificate from Vault's PKI for a key made off the heap - issued, renewed, or a renewal that failed, and until when the one in use holds |
@@ -63,7 +64,11 @@ dumps. So a value in a JFR event would be worse than one on the heap, not better
 The fingerprint replaces literals of every quoting form each dialect has, numbers, and every
 placeholder spelling. `in (?, ?, ?)` collapses to `in (?)`, so one query stays one entry. Where
 a dialect makes it ambiguous whether something is an identifier or a string (`"x"` in MySQL),
-the fingerprint gives up the identifier rather than risk the value.
+the fingerprint gives up the identifier rather than risk the value. The same goes for a MySQL
+string with a backslash before its quote: whether it ends there depends on the server's
+`NO_BACKSLASH_ESCAPES`, which the fingerprint cannot know, so the rest of the statement is
+masked. Such statements are grouped more coarsely - two that differ only after that point share
+one fingerprint.
 
 **MongoDB** records each command the same way, by its shape - seclume's own driver directly,
 the official driver through a command listener `SeclumeMongo` installs:
@@ -219,7 +224,13 @@ For each pool it reports:
   ends in an outage when nobody looks;
 - how many connections the server allows and how many are in use;
 - the pool's own numbers;
-- the seclume version.
+- the seclume version;
+- what a connection tells about itself (login, TLS, certificate, capacity) is asked once and
+  shown again for ten seconds: a dashboard that polls the endpoint does not take a connection
+  from each pool at every poll. The pool's own numbers are always current;
+- `weakenedSettings`: what weakens the defaults, as the start-up line names it - a data source
+  off `verify-full`, the secret guard off, an opt-out of a secure default; empty when nothing
+  does.
 
 It never reports a password, a statement or a value. `Version.current()` gives the same
 version to an application that wants to log it at start.
@@ -265,6 +276,14 @@ The grade never takes the health status down. Health is what a load balancer act
 certificate expiring next week taking every instance out of service at once would turn a
 warning into the outage it warns of. Whether the database can be reached stays the health
 check's question alone; alert on the grade instead.
+
+**The check does not borrow from a busy pool.** It answers whether the database can be reached
+by borrowing a connection - except from a pool with threads waiting, or with every connection
+handed out, which would make the probe wait the pool's whole timeout and take the next free
+connection from a request. Such a pool is reported from its numbers as `UNKNOWN`, and so is a
+borrow that ran into the pool's timeout: busy, not down. `UNKNOWN` does not take an instance
+out of service. A server that refuses new connections is `DOWN`. One answer is given for two
+seconds, so probes from Kubernetes, a load balancer and a dashboard borrow once between them.
 
 ## `/actuator/heapdump`: a redacted copy, never the heap itself
 
@@ -422,6 +441,7 @@ The inventory judged against rules - `space.seclume.inventory.CryptoPolicy`:
 | `tls.min-version` | 1.2 | a session below it (`1.2` or `1.3`) |
 | `tls.forward-secrecy` | true | a TLS 1.2 suite without (EC)DHE |
 | `tls.require-hybrid` | false | a key exchange that is not the ML-KEM hybrid |
+| `tls.require-authentication` | false | a TLS connection whose server was not authenticated, by its chain and name or by a pin (`tls=require`, `trustServerCertificate=true`) |
 | `certificate.min-days` | 14 | a server certificate this close to its end, or past it |
 | `signature.forbidden` | `SHA1,MD5` | a certificate signed with one of them |
 | `algorithm.forbidden` | - | a key, cipher suite or key exchange that names one |

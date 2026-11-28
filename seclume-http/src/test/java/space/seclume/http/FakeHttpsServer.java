@@ -168,6 +168,15 @@ final class FakeHttpsServer implements AutoCloseable {
                         + "\r\nafter");
                 return true;
             }
+            case "/escape" -> {
+                // An ESC sequence in the reason phrase: it must not reach a log as such.
+                write(out, "HTTP/1.1 500 \u001b[31mRED\u001b[0m\r\nContent-Length: 0\r\n\r\n");
+                return true;
+            }
+            case "/garbled" -> {
+                write(out, "XTTP/1.1 500 \u001b]0;owned\u0007 title\r\n\r\n");
+                return false;
+            }
             case "/missing" -> {
                 write(out, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
                         + "Content-Length: 9\r\n\r\nno orders");

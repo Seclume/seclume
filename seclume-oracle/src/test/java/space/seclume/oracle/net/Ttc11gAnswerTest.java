@@ -57,6 +57,28 @@ class Ttc11gAnswerTest {
     }
 
     /**
+     * The same answer with a text a server - or someone in between - shaped:
+     * a line break that would start a forged log line, an escape sequence
+     * that would repaint a terminal. They reach errorText escaped.
+     */
+    @Test
+    void controlCharactersInTheErrorTextArriveEscaped() throws Exception {
+        String hostile = "ORA-00942: no\n2026-11-27 12:00:00 INFO login ok\r\u001b[2J\n";
+        byte[] text = hostile.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String prefix = TABLE_MISSING.substring(0, TABLE_MISSING.indexOf("284f52412d"));
+        StringBuilder answer = new StringBuilder(prefix).append(String.format("%02x", text.length));
+        for (byte b : text) {
+            answer.append(String.format("%02x", b & 0xff));
+        }
+        TtcResult result = read(answer.toString(), new ArrayList<>());
+        assertEquals(942, result.errorNumber());
+        String said = result.errorText();
+        assertTrue(!said.contains("\n") && !said.contains("\r") && !said.contains("\u001b"),
+                "a control character reached the error text: " + said);
+        assertTrue(said.contains("no\\x0a2026-11-27") && said.contains("\\x1b[2J"), said);
+    }
+
+    /**
      * {@code select rpad('a', 300, 'b') as x from dual}, around its value:
      * the value itself arrives as {@code fe ff <255 bytes> 2d <45 bytes> 00},
      * every chunk length a single byte.

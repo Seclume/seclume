@@ -145,7 +145,7 @@ final class ReloadingClientIdentity implements ClientIdentity {
             return current;
         }
         if (Arrays.equals(now, refused)
-                && System.currentTimeMillis() - refusedAt < retryMillis) {
+                && System.nanoTime() - refusedAt < retryMillis * 1_000_000L) { // mutation-equivalent: the boundary is one nanosecond wide; the pause itself is tested
             return current;
         }
         space.seclume.jfr.SeclumeEvents.CertificateReload event =
@@ -164,7 +164,7 @@ final class ReloadingClientIdentity implements ClientIdentity {
             LOG.log(System.Logger.Level.INFO, "client certificate {0} reloaded", certificate);
         } catch (RuntimeException notYet) {
             refused = now;
-            refusedAt = System.currentTimeMillis();
+            refusedAt = System.nanoTime();          // monotonic: a clock set back held the retry off
             space.seclume.jfr.Observed.endCertificateReload(event, certificate.toString(),
                     false, String.valueOf(notYet.getMessage()));
             LOG.log(System.Logger.Level.WARNING, "client certificate {0} changed and could not "

@@ -38,6 +38,7 @@ final class SeclumeResult implements Result {
                           Predicate<Segment> filter, AtomicBoolean consumed) {
         this.lane = lane;
         this.statement = statement;
+        lane.opened(statement);
         this.rows = rows;
         this.updateCount = updateCount;
         this.filter = filter;
@@ -140,6 +141,8 @@ final class SeclumeResult implements Result {
             statement.close();
         } catch (SQLException ignored) {
             // The result is done with either way.
+        } finally {
+            lane.closed(statement);
         }
     }
 }

@@ -247,18 +247,11 @@ public final class MyRow implements ValueCells {
     }
 
     private long parseDigits(int at, int length) {
-        boolean negative = length > 0 && buffer.getByte(at) == '-';
-        long value = 0;
-        for (int i = negative ? 1 : 0; i < length; i++) {
-            byte digit = buffer.getByte(at + i);
-            if (digit < '0' || digit > '9') {
-                throw new NumberFormatException(
-                        "the value is not a whole number - use getString or getBigDecimal");
-            }
-            value = value * 10 + (digit - '0');
-        }
-        return negative ? -value : value;
+        // One implementation with TextNumber.decimal, which refuses a number
+        // beyond a long: a copy of its old loop here wrapped modulo 2^64.
+        return space.seclume.internal.jdbc.TextNumber.decimal(buffer, at, length);
     }
+
 
     public boolean getBoolean(int column) {
         if (isNull(column)) {

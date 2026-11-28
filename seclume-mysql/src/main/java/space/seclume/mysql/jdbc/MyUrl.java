@@ -105,7 +105,11 @@ final class MyUrl {
                     // The password itself only to a server whose certificate
                     // was checked, unless this says otherwise.
                     parsed.flag("allowCleartextOverUnverifiedTls",
-                            MySession.Settings.cleartextByDefault()));
+                            MySession.Settings.cleartextByDefault()),
+                    // mysql_native_password only to a server that proved who
+                    // it is, unless this says otherwise.
+                    parsed.flag("allowLegacyHashOverUnverifiedTls",
+                            MySession.Settings.legacyHashByDefault()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

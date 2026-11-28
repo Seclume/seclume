@@ -226,7 +226,11 @@
                  The password itself goes over such TLS only with this
                  opt-out; the tests of the refusal set the option explicitly
                  (CleartextPasswordTest). -->
-            <argLine>@{seclume.coverage.agent} --enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED -Dseclume.mysql.allowCleartextOverUnverifiedTls=true ${seclume.test.argLine}</argLine>
+            <!-- The tests name their secrets in URLs, by file mostly - as an
+                 operator does, the JVM is started to allow the providers with
+                 local resources; the default refusal is tested on its own
+                 (ProviderAllowlistTest). -->
+            <argLine>@{seclume.coverage.agent} --enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED -Dseclume.mysql.allowCleartextOverUnverifiedTls=true -Dseclume.secret.providers=file,env-file,unix-socket,dpapi,credential-manager,libsecret,keychain,shamir,spiffe-jwt ${seclume.test.argLine}</argLine>
           </configuration>
         </plugin>
         <plugin>

@@ -219,16 +219,22 @@ public final class Migrate {
         }
 
         StringBuilder out = new StringBuilder(parsed.tnsAlias != null // seclume-allow: a URL without its password
-                ? "jdbc:seclume:oracle:tns:" + parsed.tnsAlias
-                : "jdbc:seclume:" + parsed.kind + "://" + parsed.hosts + "/" + parsed.database);
+                ? "jdbc:seclume:oracle:tns:" + plain(parsed.tnsAlias, "TNS alias")
+                : "jdbc:seclume:" + parsed.kind + "://" + plain(parsed.hosts, "host")
+                        + "/" + encoded(parsed.database));
         char separator = '?';
         for (Map.Entry<String, String> option : seclume.entrySet()) {
-            out.append(separator).append(option.getKey()).append('=').append(option.getValue());
+            // Encoded, not copied: a value decoded from the source URL - an
+            // application name with "&tls=off" in it, or a line break - must
+            // stay one value of one option on one line.
+            out.append(separator).append(encoded(option.getKey())).append('=')
+                    .append(encoded(option.getValue()));
             separator = '&';
         }
+        readsBack(out.toString(), parsed, seclume);
         lines.add(target + "url=" + out);
         if (user != null) {
-            lines.add(target + "username=" + user);
+            lines.add(target + "username=" + plain(user, "user name"));
         }
         lines.add(target + "secret-uri=file:/run/secrets/" + name + "-db-password");
         findings.add(new Finding(passwordSeen ? Level.UNSAFE : Level.CHANGED, name + ": "
@@ -266,8 +272,14 @@ public final class Migrate {
         seconds(in, "connectTimeout", out, 1000, findings);
         target(in, out, findings);
         clientCertificate(in, "sslcert", "sslkey", out, findings);
+        if (in.remove("sslpassword") != null) {
+            findings.add(new Finding(Level.UNSAFE, "sslpassword - the client key's password stood "
+                    + "in the configuration, a String for the life of the application. Dropped: "
+                    + "give the key through clientKey-provider (PROVIDERS.md), which reads it off "
+                    + "the heap"));
+        }
         for (String ignored : List.of("prepareThreshold", "preparedStatementCacheQueries",
-                "sslpassword", "loginTimeout", "tcpKeepAlive")) {
+                "loginTimeout", "tcpKeepAlive")) {
             if (in.remove(ignored) != null) {
                 findings.add(new Finding(Level.CHANGED, ignored + " - handled by seclume on its "
                         + "own (plan cache, keepalive, timeouts), dropped"));
@@ -455,9 +467,22 @@ public final class Migrate {
             }
             String setting = kebab(entry.getKey().substring(hikari.length()));
             String value = entry.getValue().trim();
+            // A value goes into a properties line as it stands, where a
+            // backslash or a line break is Properties.load's to read: only what
+            // has the setting's shape is written, the rest is reported.
             if (setting.equals("maximum-pool-size") || setting.equals("minimum-idle")) {
+                if (!value.matches("\\d{1,9}")) {
+                    findings.add(new Finding(Level.NOT_TRANSLATED, name + ": hikari." + setting
+                            + " is not a number - left out"));
+                    continue;
+                }
                 lines.add(target + "pool." + setting + "=" + value);
             } else if (durations.containsKey(setting)) {
+                if (!value.matches("\\d{1,12}(ms|s|m|h|d)?")) {
+                    findings.add(new Finding(Level.NOT_TRANSLATED, name + ": hikari." + setting
+                            + " is not a duration - left out"));
+                    continue;
+                }
                 lines.add(target + "pool." + setting + "="
                         + (value.matches("\\d+") ? value + "ms" : value));
             } else if (setting.equals("connection-test-query")) {
@@ -850,5 +875,99 @@ public final class Migrate {
         String lower = key.toLowerCase(Locale.ROOT);
         return lower.endsWith("password") || lower.endsWith("passwd") || lower.endsWith("pwd")
                 || lower.endsWith(".secret");
+    }
+
+    /**
+     * {@code text} for a seclume URL: everything but the unreserved characters percent-encoded,
+     * as UTF-8 - written out code point by code point, without a byte array of the text.
+     */
+    static String encoded(String text) {
+        StringBuilder out = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            i += Character.charCount(cp);
+            if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9')
+                    || cp == '-' || cp == '.' || cp == '_' || cp == '~' || cp == '/' || cp == ':'
+                    || cp == ',') {
+                out.append((char) cp);
+            } else if (cp < 0x80) {
+                percent(out, cp);
+            } else if (cp < 0x800) {
+                percent(out, 0xc0 | cp >> 6);
+                percent(out, 0x80 | cp & 0x3f);
+            } else if (cp < 0x10000) {
+                percent(out, 0xe0 | cp >> 12);
+                percent(out, 0x80 | cp >> 6 & 0x3f);
+                percent(out, 0x80 | cp & 0x3f);
+            } else {
+                percent(out, 0xf0 | cp >> 18);
+                percent(out, 0x80 | cp >> 12 & 0x3f);
+                percent(out, 0x80 | cp >> 6 & 0x3f);
+                percent(out, 0x80 | cp & 0x3f);
+            }
+        }
+        return out.toString();
+    }
+
+    private static void percent(StringBuilder out, int b) {
+        out.append('%').append(Character.toUpperCase(Character.forDigit(b >> 4 & 0xf, 16)))
+                .append(Character.toUpperCase(Character.forDigit(b & 0xf, 16)));
+    }
+
+    /**
+     * The URL just written, read back as the driver will read it - its
+     * database and every option the same as meant, or the translation is
+     * refused. What a value decoded from the source turns into on the way out
+     * is what this is about: an option that came out as two, or as another,
+     * would be a migration that changed the security of the connection.
+     */
+    static void readsBack(String url, Parsed meant, Map<String, String> options) {
+        readsBack(url, meant.kind, meant.tnsAlias, meant.database, options);
+    }
+
+    static void readsBack(String url, String kind, String tnsAlias, String meantDatabase,
+                          Map<String, String> options) {
+        Map<String, String> read;
+        String database;
+        if (tnsAlias != null) {
+            int query = url.indexOf('?');
+            read = new LinkedHashMap<>();
+            if (query >= 0) {
+                for (String pair : url.substring(query + 1).split("&")) {
+                    int equals = pair.indexOf('=');
+                    read.put(URLDecoder.decode(equals < 0 ? pair : pair.substring(0, equals),
+                                    StandardCharsets.UTF_8),
+                            equals < 0 ? "" : URLDecoder.decode(pair.substring(equals + 1),
+                                    StandardCharsets.UTF_8));
+                }
+            }
+            database = meantDatabase;
+        } else {
+            String prefix = "jdbc:seclume:" + kind + ":";
+            space.seclume.internal.JdbcUrl.Parsed back =
+                    space.seclume.internal.JdbcUrl.parse(url, null, prefix, 1);
+            read = back.options();
+            database = back.database();
+        }
+        if (!read.equals(options) || !java.util.Objects.equals(
+                database == null || database.isEmpty() ? null : database,
+                meantDatabase == null || meantDatabase.isEmpty() ? null : meantDatabase)) {
+            throw new IllegalArgumentException("the translation does not read back as it was "
+                    + "meant - options " + options.keySet() + " came back as " + read.keySet()
+                    + "; not written");
+        }
+    }
+
+    /** A host list or user name as it is, refused if it holds anything that would start something else. */
+    static String plain(String text, String what) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c < 0x20 || c == 0x7f || c == '?' || c == '&' || c == '#' || c == '=') {
+                throw new IllegalArgumentException("the " + what + " holds '" + (c < 0x20
+                        ? String.format("\\u%04x", (int) c) : String.valueOf(c))
+                        + "' - not translated");
+            }
+        }
+        return text;
     }
 }

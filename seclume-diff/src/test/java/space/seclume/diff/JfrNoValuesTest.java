@@ -91,7 +91,7 @@ class JfrNoValuesTest {
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true", "dual"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "", "dual"));
+                        ".local-oracle-password", "&tls=off", "dual"));
     }
 
     @ParameterizedTest(name = "{0}")

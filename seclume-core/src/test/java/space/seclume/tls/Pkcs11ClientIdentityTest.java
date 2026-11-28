@@ -68,6 +68,8 @@ class Pkcs11ClientIdentityTest {
                         "/usr/lib64/pkcs11/libsofthsm2.so", "/usr/lib64/softhsm/libsofthsm.so")
                 .stream().filter(path -> Files.exists(Path.of(path))).findFirst().orElse(null);
         Assumptions.assumeTrue(module != null, "no SoftHSM module installed");
+        // Named in a URL, a module is loaded only where the JVM allows it.
+        System.setProperty(ClientIdentities.PKCS11_MODULES_PROPERTY, module);
         Assumptions.assumeTrue(TestCertificates.available(), "no keytool in this JDK");
 
         authority = TestCertificates.generate();
@@ -109,6 +111,7 @@ class Pkcs11ClientIdentityTest {
 
     @AfterAll
     static void removeTheToken() throws Exception {
+        System.clearProperty(ClientIdentities.PKCS11_MODULES_PROPERTY);
         if (token != null) {
             run("softhsm2-util", "--delete-token", "--token", token);
         }

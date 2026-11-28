@@ -210,12 +210,24 @@ public final class ShamirShares {
      * Windows: the file's ACL down to its owner, before a byte of the share
      * is in it. A new file takes its directory's ACL, which on a shared or
      * system directory lets every local user read it.
+     *
+     * <p>A file system with neither POSIX permissions nor ACLs - FAT32, exFAT,
+     * some network shares - cannot be told who may read the file; the share
+     * was written there with the mount's defaults, without a word. It is
+     * refused, unless {@code seclume.shamir.allowUnprotected=true} says the
+     * medium is protected otherwise (an encrypted stick in a safe).
      */
     private static void ownerOnly(Path file) throws IOException {
         java.nio.file.attribute.AclFileAttributeView acl = Files.getFileAttributeView(file,
                 java.nio.file.attribute.AclFileAttributeView.class);
         if (acl == null) {
-            return;
+            if (Boolean.getBoolean("seclume.shamir.allowUnprotected")) {
+                return;
+            }
+            throw new IOException(file.getFileName() + ": this file system can restrict a "
+                    + "share's readers neither by POSIX permissions nor by ACL - not written. "
+                    + "-Dseclume.shamir.allowUnprotected=true where the medium is protected "
+                    + "otherwise.");
         }
         java.nio.file.attribute.UserPrincipal owner = acl.getOwner();
         acl.setAcl(List.of(java.nio.file.attribute.AclEntry.newBuilder()

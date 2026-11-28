@@ -190,7 +190,8 @@ class ConnectFailureWipeTest {
             sendError(out, "28P01", "password authentication failed for user \"app\"");
         })) {
             SQLException refused = assertThrows(SQLException.class,
-                    () -> PgSession.open(settings(server.port(), TlsMode.OFF)));
+                    () -> PgSession.open(settings(server.port(), TlsMode.OFF)
+                            .allowingLegacyHash()));   // the stand-in asks md5, no TLS
             assertTrue(refused.getMessage().contains("password authentication failed"),
                     refused.getMessage());
         }

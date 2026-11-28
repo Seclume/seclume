@@ -46,6 +46,21 @@ concurrency:
   group: mutation-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
   pit:
     name: mutation (${{ matrix.package }}, ${{ matrix.shard }}/${{ matrix.shards }})
@@ -75,6 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Whether its inputs differ from main
         id: inputs
@@ -156,6 +172,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Whether its inputs differ from main
         id: inputs
@@ -175,8 +192,19 @@ jobs:
           pattern: pit-${{ matrix.package }}-*
           path: pit
           merge-multiple: true
+      # On a pull request, a survivor on a line the change added or altered is
+      # an error of its own: the score can stay above its floor while new
+      # security code comes without a test that notices a fault in it.
       - name: The score, and the survivors
         if: steps.inputs.outputs.state == 'changed'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           reports=$(for i in $(seq 1 ${{ matrix.shards }}); do printf '%s' "${sep:-}pit/pit-${{ matrix.package }}-$i/mutations.xml"; sep=,; done)
-          python3 .github/scripts/pit_report.py "$reports" ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}'
+          changed=
+          if [ -n "${BASE_SHA:-}" ]; then
+            git fetch --no-tags --no-recurse-submodules --depth=1 origin "$BASE_SHA"
+            python3 .github/scripts/changed_lines.py "$BASE_SHA" ${{ matrix.module }}/src/main/java > "$RUNNER_TEMP/changed-lines.txt"
+            changed="$RUNNER_TEMP/changed-lines.txt"
+          fi
+          python3 .github/scripts/pit_report.py "$reports" ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}' "$changed"

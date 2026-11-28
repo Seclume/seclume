@@ -35,15 +35,20 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
     private final Function<String, List<X509Certificate>> bundles;
     private final Supplier<List<X509Certificate>> issuers;
     private final Set<String> peers;
+    /** The workload's own trust domain: without peer-ids, the only one trusted. */
+    private final Supplier<String> own;
 
     /**
      * @param bundles the CAs for a trust domain - empty for one without a bundle
      * @param issuers every CA, for {@link #getAcceptedIssuers}
-     * @param peers   the SPIFFE IDs a peer may have; empty for any of the trust
-     *                domains that have a bundle
+     * @param peers   the SPIFFE IDs a peer may have; empty for any workload of
+     *                this workload's own trust domain - a federated one's only
+     *                when named here
+     * @param own     this workload's trust domain, from its current SVID
      */
     SpiffeTrustManager(Function<String, List<X509Certificate>> bundles,
-            Supplier<List<X509Certificate>> issuers, Set<String> peers) {
+            Supplier<List<X509Certificate>> issuers, Set<String> peers, Supplier<String> own) {
+        this.own = own;
         this.bundles = bundles;
         this.issuers = issuers;
         this.peers = Set.copyOf(peers);
@@ -62,6 +67,13 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
         } catch (IllegalArgumentException e) {
             throw new CertificateException("the peer's SPIFFE ID is malformed: "
                     + e.getMessage(), e);
+        }
+        leafOnly(chain[0]);
+        if (peers.isEmpty() && !domain.equals(own.get())) {
+            // A federated domain's workloads are trusted for what they are named
+            // for, not for anything: without peer-ids only this workload's own.
+            throw new CertificateException("the peer is of the federated trust domain " + domain
+                    + "; name it in peer-ids to accept it");
         }
         List<X509Certificate> anchors = bundles.apply(domain);
         if (anchors.isEmpty()) {
@@ -85,6 +97,25 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
         if (!peers.isEmpty() && !peers.contains(id)) {
             throw new CertificateException("the peer is " + id + ", which is not one of "
                     + peers);
+        }
+    }
+
+    /**
+     * An X509-SVID's leaf as the specification has it: not a CA, and where
+     * it says what its key is for, for signatures and not for signing
+     * certificates or CRLs. A CA certificate with a SPIFFE URI in it passed
+     * as a peer's leaf - this trust manager is not the JDK's, which would
+     * have checked the key usage.
+     */
+    static void leafOnly(X509Certificate leaf) throws CertificateException {
+        if (leaf.getBasicConstraints() != -1) {
+            throw new CertificateException("the peer's SVID is a CA certificate, not a leaf");
+        }
+        boolean[] usage = leaf.getKeyUsage();
+        if (usage != null && (!usage[0] || (usage.length > 5 && usage[5])
+                || (usage.length > 6 && usage[6]))) {
+            throw new CertificateException("the peer's SVID is not for digital signatures "
+                    + "only - it may sign certificates or CRLs, or not sign at all");
         }
     }
 

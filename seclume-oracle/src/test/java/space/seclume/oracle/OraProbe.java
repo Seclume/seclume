@@ -34,7 +34,7 @@ public final class OraProbe {
 
         FileSecretProvider provider = new FileSecretProvider(secretFile, 256);
         OracleSession.Settings settings = new OracleSession.Settings(
-                host, port, service, user, provider, 10_000);
+                host, port, service, user, provider, 10_000).withTls(space.seclume.internal.jdbc.TlsMode.OFF);
 
         List<String> results = new ArrayList<>();
         for (int i = 0; i < cycles; i++) {

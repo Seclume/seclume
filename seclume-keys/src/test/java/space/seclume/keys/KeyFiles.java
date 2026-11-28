@@ -22,6 +22,7 @@ record KeyFiles(Path directory, Path key, Path certificate, Path der, Path secre
         Files.createDirectories(directory);
         String generate = kind.startsWith("rsa:")
                 ? "openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:" + kind.substring(4)
+                : kind.equals("ed25519") ? "openssl genpkey -algorithm ED25519"
                 : "openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:" + kind.substring(3);
         String part = kind.startsWith("rsa:") ? "prime1" : "priv";
         String script = String.join("\n",

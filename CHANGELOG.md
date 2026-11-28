@@ -5,6 +5,715 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Upgrading: what changes behaviour
+
+- **`provider=process` runs a program only where the JVM allows it.** A JDBC URL - which some
+  applications take from their users - could start any program with `provider=process`. It now
+  needs `-Dseclume.secret.process.allowed=true` (or `process` in `-Dseclume.secret.providers`);
+  a provider built in code is unchanged.
+- **A query that ignores its cancellation loses its connection.** After the query timeout and a
+  grace (`seclume.queryTimeoutGraceSeconds`), a statement the server did not stop has its
+  connection closed; a write reports `TransactionResolutionUnknownException` (08007), and the
+  pool retires the connection.
+- **`verify-full` is the default TLS mode.** A URL without `tls=` encrypted where the server
+  offered it and checked no certificate (`prefer`; Oracle: no encryption at all) - so a server
+  in the middle was taken for the database. Now PostgreSQL, MySQL and Oracle check the
+  certificate and the host name unless the URL says otherwise; SQL Server did already. A
+  connection to a server with a self-signed or private-CA certificate fails until the CA is
+  given (`tlsRootCert=...`, `tlsPin=...` or the JVM's trust store), or the URL relaxes it on
+  purpose: `tls=require` (encrypted, certificate not checked), `tls=prefer` or `tls=off`. A
+  relaxed mode is named among the weakened settings. Oracle without TCPS needs `tls=off`.
+- **A field encryption key of one repeated byte is refused.** 32 zero bytes already were; one
+  byte 32 times - a placeholder filled in, a test value - has eight bits of choice and is
+  refused now as well when the key ring is built. Make a real key: `openssl rand -base64 32`.
+- **A database login has a budget: `seclume.loginBudgetFactor` (3) times the connect timeout.**
+  A server - or something between - that answered a byte at a time kept a login going for as
+  long as it liked. Now a login, the TLS handshake included, that has not finished within three
+  connect timeouts is aborted with 08001 naming the budget. A login that is slow on purpose
+  (Kerberos with a distant KDC, a cold Vault) needs a longer `connectTimeout`, or a larger
+  factor.
+- **No Base64 is decoded with the JDK's intrinsic.** On unpatched JVMs CVE-2026-114938 makes
+  `java.util.Base64`'s decoder exploitable with crafted input, and seclume decoded with it what
+  an attacker controls - a JWT before its MAC was checked, an HMAC signature, a KMS's answer, a
+  stored ciphertext. A decoder of its own does it now, as strictly as the JDK's and stricter on
+  stray bits; a source rule refuses the JDK's decoders in production code. SECURITY.md names the
+  fixed JDK, 25.0.5.1.
+- **`/actuator/seclume` takes no connection from the application at every poll.** It borrowed
+  one from each pool per call to read the login, TLS and certificate; what it learned is shown
+  again for ten seconds now, the pool's numbers always current.
+- **A TLS 1.2 connection is closed when its key wears out.** TLS 1.3 connections change their
+  sending key after 2^24 records; TLS 1.2 has no KeyUpdate, and its connections went on under
+  one AES-GCM key past that limit. Such a connection is now closed at the limit, sending or
+  receiving - the pool opens a new one, with new keys. (2^24 records is up to 256 GiB.)
+- **`/actuator/seclume` lists the weakened settings.** What the start-up line names - a data
+  source off `verify-full`, the secret guard off, a lowered SCRAM floor, an opt-out such as
+  `seclume.crac.holdExpiry=release` - is the endpoint's `weakenedSettings` too, for a dashboard
+  or a check that asks rather than reads the log.
+- **A signed access log is vouched for only from its first entry.** One whose start was cut
+  off - its checkpoints holding over what is left - counted as vouched for. `vouched()` now
+  needs the log from entry 1, and `--audit-verify` with a key exits 3 for such a log, naming the
+  entry it starts at; given with the files before it, the whole log is checked.
+- **The access log check names a log never opened with the key it is checked against.** A
+  log whose `log.opened` says it was unsigned - its signing taken out and the chain hashed
+  again - or names another key, without a checkpoint to show it, passed as a chain that merely
+  was not vouched for. Checked against a key, it is now refused, naming the line. A log
+  unsigned at first and opened with the key later still holds.
+- **A server's status or reply line reaches no log raw.** `SeclumeHttp`'s messages and
+  `Response.reason()`, and the IMAP, POP3 and SMTP refusals, carried the server's line as it
+  came - an ESC sequence or a bare CR in it went on to the log and the terminal showing it. It
+  is escaped now, as the database drivers' server messages already were.
+- **A pull request is held to the coverage floors of the base branch.** The floors and their
+  gate script were read from the change itself, which could lower a floor in the commit that
+  drops the tests it guarded. As with the security gate, a pull request is now checked with the
+  base branch's floors and script (`trusted_coverage_floors.sh`); a change to them applies once
+  merged.
+- **gRPC call credentials name their server.** `SeclumeGrpc.bearer(spec, "host:port")` and
+  `header(name, spec, "host:port")` send the secret to that server only; the forms without one
+  are deprecated, as `SeclumeGit.credentials(user, spec)` was - they bound the secret to
+  whichever server they were first used with.
+- **MySQL and MariaDB: a borrower's `SET ROLE` no longer reaches the next borrower.**
+  `COM_RESET_CONNECTION` keeps the active roles (measured on MySQL 8.4 and MariaDB 11.4): a
+  borrower that activated a role handed its privileges to whoever borrowed the connection
+  next. The reset now puts the login's roles back in the same write - `SET ROLE DEFAULT` on
+  MySQL; on MariaDB, which has no such statement, the role the login activated, read with the
+  query the login already sends. Where it is not known the connection is closed instead.
+  Found by the new live reset tests, which also cover `sql_mode` and `SET NAMES`.
+- **A PKCS#11 module named in a URL is loaded only where the JVM allows it.**
+  `clientCertPkcs11` names a native library that is loaded and run in the process; a URL or
+  Properties - configuration some applications let others write - could name any. Such a module
+  now has to be listed in `-Dseclume.pkcs11.modules=...`, or it is refused before anything is
+  loaded. A `Pkcs11ClientIdentity` built in code is unchanged.
+- **CRaC: a checkpoint's hold no longer ends by itself.** After `seclume.crac.holdMillis` (60 s)
+  the hold on new secrets used to end, though a resource notified after seclume's could still
+  be running and the image not yet written - a secret made then was in it (shown on a CRaC JDK).
+  Now the waiting secret is refused and the hold stays until the restore or the abort.
+  `seclume.crac.holdExpiry=release` restores the old behaviour, with a warning.
+- **Patroni: an endpoint without a scheme is asked over https.** `patroni=db1:8008` was asked
+  over plain http, where anybody on the way could write the answer that picks the server. It
+  is https now. `http://` still works where the URL says so, with a warning once per endpoint,
+  and any other scheme is refused. New: `patroniHosts=` address ranges admit members that
+  Patroni names by address, which no host name in the URL matches.
+- **Admission webhook: a SPIFFE host directory only for the namespaces named.** With
+  `--spiffe-host-path`, every pod annotated `seclume.space/spiffe: "true"` got a `hostPath`
+  volume, in any namespace, including privileged ones where Pod Security lets it through.
+  `--spiffe-namespaces` (Helm: `spiffe.namespaces`) is required with it now, and pods of other
+  namespaces get a warning instead of the volume. The CSI driver's volume is unchanged.
+- **Redis: a cluster over plain `redis://` needs `allow-plain-discovery=true`.** Its nodes come
+  from `CLUSTER SLOTS` and `MOVED` answers that anybody on the way can write, and without TLS
+  no certificate stops the application's data from going where they say (the password already
+  stayed with the listed hosts). `rediss://` is unchanged.
+- **JWT: a token without `exp` is refused.** `SeclumeJwt.verify` accepted a token with no
+  expiry, which is valid for ever once it leaks. It is refused now; `require-exp=false` in the
+  spec accepts such tokens where that is meant. New: `max-lifetime=` seconds bounds
+  `exp - iat` (both then required) and refuses an `iat` in the future.
+- **Kafka: the credential goes only to brokers in the domains of `bootstrap.servers`.** The
+  cluster's metadata names every broker a client logs in to, and one announced elsewhere - a
+  compromised broker, a changed `advertised.listeners` - got the PLAIN password or the bearer
+  token. Brokers outside the bootstrap hosts' domains get no credential now; name theirs in
+  `seclume.kafka.allowed-brokers=<suffix>,...`. The same rule as for MongoDB's members, now one
+  rule in `space.seclume.internal.SeedDomains`.
+- **JGit: credentials name their remote.** `SeclumeGit.credentials(user, spec)` named none, and
+  JGit gives a login to whichever server asks - a submodule's host from a `.gitmodules` someone
+  else wrote among them; the secret was bound to whichever asked first. It is refused now, with a
+  message pointing to `credentials(user, spec, remoteUrl)`, which sends the secret to that host
+  only.
+- **Kafka: a value is bound to its record's key.** Kafka does not show a value's serializer the
+  key, so whoever could write to the broker could move account-17's value under account-99, and it
+  was read there. `EncryptingSerializer` binds a value to its key now, which needs the key's
+  serializer wrapped in `KeyBinding.serializer(...)` (and the consumer's key deserializer in
+  `KeyBinding.deserializer(...)`); without it a value is refused rather than written unbound. A
+  topic written before: read it with `seclume.kafka.read-unbound=true` while it holds both, or keep
+  writing and reading it unbound with `seclume.kafka.bind-to-key=false` (or the constructor's
+  `bindToKey`) on both sides.
+- **A provider that reads this machine is named at start-up.** `file`, `env-file`,
+  `unix-socket`, `process`, `dpapi`, `credential-manager`, `libsecret`, `keychain`, `shamir` and
+  `spiffe-jwt` are chosen from a URL or Properties only where the JVM is started with
+  `-Dseclume.secret.providers=<names>` (comma-separated; `process` also with its old switch).
+  Whoever writes a URL also picks the host the secret goes to, and could have the machine read
+  any file it can as the password. A URL with `provider=file` now fails with a message naming
+  the property; set it once where the application starts. Providers built in code, and the
+  remote ones (Vault, the cloud stores and KMSs, RDS IAM), are unchanged.
+- **md5 and `mysql_native_password` only to a server that proved who it is.** Under
+  `tls=prefer` or `require` - and without TLS - a server in the middle could ask for either and
+  take a fast hash of the password, for a salt it chose, to guess against. They are answered only
+  under `tls=verify-full` or `tlsPin` now, as the cleartext methods are. A MySQL login whose
+  server proposes `mysql_native_password` offers `caching_sha2_password` instead, so an account
+  with a SHA-2 hash logs in as before; an account that only has a native hash (MariaDB's
+  default), and every PostgreSQL role whose server asks for md5 (YugabyteDB 2024 and older,
+  `password_encryption = md5`), is refused with SQLState 28000 and a message naming the way out:
+  check the certificate, move the account to SCRAM or `caching_sha2_password`, or set
+  `allowLegacyHashOverUnverifiedTls=true` (URL, DataSource, or
+  `-Dseclume.postgresql.allowLegacyHashOverUnverifiedTls=true` /
+  `-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true`). The Spring Boot connection details
+  for MySQL and MariaDB containers set it, as they set `allowCleartextOverUnverifiedTls`.
+- **Pool: a driver connection that is back in the pool refuses.** What
+  `unwrap(PgConnection.class)` (or `MyConnection`, `TdsConnection`, `OraConnection`) returned
+  during a borrow and was kept past `close()` ran in the next borrower's session. Between two
+  borrows it now throws `08003`; keep such a reference no longer than the borrow.
+- **Redis: the password goes only into an AUTH for its own user.** A placeholder after another
+  user's name - or in a password-only `AUTH`, which is the `default` user's, where the URL names
+  a user - is sent as it is and the login fails. With Sentinel, a connection to a Sentinel of
+  the URL rewrites the Sentinel's placeholder only and any other connection the data nodes'
+  only: either written into the other's AUTH sent that password to the wrong server.
+- **MongoDB: an announced member outside the seeds' domains gets no connection.** Any host in a
+  hello's member lists got one, and the SCRAM proof, AWS signature or OIDC token with it. Members
+  may be the seeds' hosts, hosts in a seed's parent domain (`a.db.example` admits `b.db.example`),
+  or hosts under `-Dseclume.mongodb.allowedHosts=<suffix>,...` (`*.b.example` is understood);
+  others are warned about and left out. The same holds for the official driver through
+  `SeclumeMongo`: its socket refuses to connect to such a host, before any byte is sent.
+- **A column rotation goes past a value that does not open.** One tampered or damaged value,
+  or one under a key no longer in the ring, stopped the whole rotation with a
+  `FieldEncryptionException`. It is left as it is and counted: `Progress` has `unreadable()` and
+  `unreadableIds()` (the first 100) now.
+- **R2DBC: `options` may not set an option that has its own** - `provider`, `path`, `tls...`,
+  `trustServerCertificate`, `vault...`, `user` and the like. It was appended to the JDBC URL as it
+  came; give those as options of their own (`?trustServerCertificate=true`).
+- **Elasticsearch: a nested field name is refused** (`field("address.street", ...)`). Only a
+  document's top-level fields are encrypted; the nested one went to the cluster in the clear.
+- **SQL Server: the session context is set read-only.** An application that sets the same
+  key again within one borrow gets an error; an SQL injection can no longer rewrite the tenant.
+  The reset on return still clears it.
+- **`verify=false` on a secret source is for this machine only.** Vault, transit, a KMS and the
+  cloud metadata services sent their token and secret to whoever answered with it, wherever the
+  host was. Off loopback it takes `-Dseclume.allowUnverifiedSecretSources=true` now.
+- **A field encryption key of 32 zero bytes is refused** - a file from `/dev/zero`, an empty
+  vault field, `AAAA...=`. Everything under such a key is readable by anybody who tries it.
+- **JWT `leeway` is 0 to 300 seconds.** It was taken as given; `leeway=99999999` let an
+  expired token pass for three years.
+- **Elasticsearch: an index whose name has a dot gets a column name of its own.**
+  `search.<index>.<field>` named index `a`, field `b.c` and index `a.b`, field `c` alike, so one
+  key opened the other's values. An index with a dot is now `search:<length>:<index>.<field>`;
+  values encrypted in such an index before have to be encrypted again (read with 0.14, write
+  with this). An index without a dot keeps its name and its data.
+- **A Shamir share is not written where its readers cannot be restricted** - a file system
+  with neither POSIX permissions nor ACLs (FAT32, exFAT, some network shares). It was written
+  with the medium's defaults; `-Dseclume.shamir.allowUnprotected=true` where the medium is
+  protected otherwise.
+- **A control character in user, database or application name is refused when the URL is
+  read** (`IllegalArgumentException`), for all four drivers, before a socket opens. Each driver
+  frames these fields its own way, and a control character has ended one or started another.
+- **PostgreSQL: a malformed answer is SQLState `08P01`**, a line that went dead stays `08006`.
+  Both lose the connection; the class says which to look for. A DataRow before any
+  RowDescription in a simple query is such an answer now; it was read against no columns.
+- **R2DBC takes its session context from the Reactor context.** A `SeclumeSessionContext` was
+  asked on whichever thread borrowed - an event loop when a connection was free, a thread of the
+  pool's when it had to wait - so a request had its tenant at low load and lost it under load.
+  Declare a `ReactiveSessionContext` bean (or call `SeclumeConnectionFactory.withSessionContext`);
+  the starter warns at start-up when R2DBC is on and only a blocking context is there.
+- **A key the JDBC URL gives twice is refused** (`IllegalArgumentException` naming the key).
+  The last value used to win, so `...?tls=verify-full&...&tls=off` was off. Give each option
+  once; `Properties` still override the URL.
+- **Patroni may name only the URL's own hosts.** A `/cluster` answer can reorder the servers
+  the URL lists, not add one. List every member in the URL.
+- **SPIFFE: without `peer-ids`, only the workload's own trust domain is a peer.** A federated
+  domain's workload used to be accepted as any server and client. Name federated peers in
+  `peer-ids`.
+- **An HTTP credential placeholder is written only into credential headers**
+  (`Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`). Elsewhere it
+  goes as it is.
+- **`Driver.connect` throws only `SQLException`.** A secret provider's or a URL's unchecked
+  failure is SQLSTATE 08001 with it as the cause.
+- **Redis: a node discovery names gets the password only if the URL or `cluster-hosts=` /
+  `master-hosts=` allows it** (a host, an IP, a `.suffix`, or `*`). One forged `-MOVED` or Sentinel
+  answer sent the password where it pointed. A cluster whose nodes are not all in the URL, or a
+  Sentinel whose master is not, needs the option.
+- **The pool's grade warns for an encrypted connection whose server was not checked**
+  (`tls=prefer`, `require`); `Secured.serverAuthenticated()` says which it is.
+
+### Added
+
+- **`SeclumeKeys.keyManager(chain, SecretProvider[, interval])`.** A key file a program's own
+  configuration names is read through a provider built in code; `provider=file` in a key spec
+  stays for where the JVM allows it. The admission webhook reads its TLS key so, as do the AWS
+  container and web-identity sources and MongoDB's Kubernetes OIDC token for a path the
+  platform sets; a token file named in the URL still needs the JVM's allowance.
+- **A credential placeholder can be taken back.** `SeclumeSslSocketFactory.forget(placeholder)`
+  removes it - a request still carrying it is refused from then on - and closes its secret
+  provider. For a client that is done, not for each request: placeholders are meant to be made
+  once and kept, as the Javadoc of `placeholder`, `SeclumeGit.credentials` and
+  `SeclumeGrpc.bearer` now says.
+- **A transport says where it comes from, and can be kept to the ones meant.** The first
+  connection over a transport other than `socket` logs, once, the class and the jar that
+  carry it. `-Dseclume.transport.allowed=a,b` limits what a `transport=` URL option or
+  `seclume.transport` may name - for URLs that come from further away than the class path;
+  a name it does not list opens nothing. Unset, any provider on the class path may be named,
+  as before: a URL picks among code that is already there, it cannot load any.
+- **`heapcheck --in-target`: a hostile application cannot lead the check out of its file
+  system.** The check, usually root, walked the application's links itself and opened the path
+  afterwards; in between the application could swap a directory for an absolute link, which
+  the kernel follows from the host's root - and the check read, or deleted, a host file. Every
+  file is now opened by the kernel inside the application's root (`openat2`,
+  `RESOLVE_IN_ROOT`) and read by its descriptor; deletion removes a link, never its target.
+  The same for the dump a process in another container left behind. A FIFO in place of the
+  dump is refused instead of blocking. Linux 5.6 or later.
+- **Documented, and measured: revoking a Vault lease leaves open sessions running.** With
+  Vault's default revocation a dropped PostgreSQL user's session carries on, and a pool holds it
+  until the lease would have ended. PROVIDERS.md gives the `revocation_statements` that end them
+  per database; `.github/scripts/vault_revocation_proof.sh` shows both cases.
+- **A SQL Server session that impersonated is closed on return, not lent dead.** After
+  `EXECUTE AS` without `REVERT`, `SETUSER` or `sp_setapprole` without a cookie, SQL Server answers
+  the reset by killing the session - and the reset rides on the next request, so the next
+  borrower got error 596 on its first statement. The driver now refuses the reset for such a
+  session and the pool closes it. Nothing leaked before (the server refused), but a borrower
+  failed. Impersonation hidden in dynamic SQL or a procedure is not seen in the text and still
+  ends that way - fail closed. Found by the new live tests, which also show that an open
+  transaction left on return is rolled back on all four databases.
+- **CRaC with Spring Boot and Quarkus needs no code.** With `seclume-crac` on the class path the
+  starter registers the process's part (cached credentials and keys wiped, new secrets held back)
+  and every seclume pool in the context. The Quarkus extension registers the process's part.
+  Before, nothing loaded `SeclumeCrac` in an application without a pool, so its checkpoint image
+  kept what the process held. Registering a pool twice is now nothing, and
+  `SeclumeCrac.isRegistered(pool)` / `isProcessRegistered()` say what is registered.
+- **The security regressions run together, and none can drop out unnoticed.** A job in
+  `security.yml` runs the classes listed in `.github/security-regressions.txt` (33 now, across
+  13 modules) and fails when one of them did not run, or skipped all of its tests.
+- **The workflows are linted with zizmor.** `security.yml` runs zizmor 1.32.0, installed by
+  hash, over `.github/workflows` and fails on a medium or high finding. Its first run found 50
+  checkouts that left the GitHub token in `.git/config` (all set `persist-credentials: false`
+  now) and a Maven cache in the release rebuild, through which another run could have fed the
+  attested build (removed).
+- **Downloaded artifacts are checked against a checked-in SHA-256 lock.** `--strict-checksums`
+  only compared a download with the repository's own checksum, which a compromised repository
+  or cache serves along with the file. `.mvn/checksums` now holds the SHA-256 of every
+  artifact and plugin of the test and release builds (2,514), and every workflow checks
+  downloads against it with Maven Resolver's trusted checksums. A pinned version served with
+  other bytes fails the build. New artifacts are not refused yet; they are recorded with
+  `.github/scripts/record-checksums.sh`, and `.mvn/` is a code-owned gate path.
+- **Every release is rebuilt from its tag and compared with Maven Central.** `reproducible.yml`
+  runs when a GitHub release is published (or by hand for an earlier tag). It builds the tag as
+  the release is built and compares every jar, sources and javadoc included, byte for byte with
+  Maven Central. Only jars that match get a SLSA build provenance attestation. Rebuilding 0.14.0
+  showed that no jar matched: the release was built on Windows, where `core.autocrlf` put the
+  LICENSE, the license texts and the bundled `pom.xml` into the jars with CRLF. With
+  `.gitattributes` now checking out text with LF everywhere, a Windows build and a Linux build
+  of 0.14.0 are byte for byte the same. 0.15.0 is the first release the check can pass for.
+- **Pull requests that change the security gate are named.** A new workflow, `gates.yml`, lists
+  the changed files the gate is made of (workflows, build files, Maven wrapper, `SECURITY.md`,
+  the source-rule tests) in the run summary and labels the pull request `touches-gates`. It reads
+  the file list from the API, checks nothing out, and labels only pull requests from this
+  repository.
+- **Field encryption can hide the length of a value.** A ciphertext showed its plaintext's
+  length to the byte. `FieldKeys.column(name, mode, context, padding)` with
+  `Padding.toMultipleOf(n)` or `Padding.toPowerOfTwo(min)` writes the value's length, the
+  value and zeros up to the padded size, all of it encrypted. A flag bit in the authenticated
+  header marks the value padded. Every column reads padded and unpadded values. A padding
+  column reports unpadded ones as needing re-encryption, and padding is never taken off.
+  `plaintextLength` is an upper bound for a padded value. The JPA bytes converter returns the
+  exact length.
+- **Crypto policy: `tls.require-authentication`.** A TLS connection encrypted to whoever
+  answered - `tls=require`, `trustServerCertificate=true` - is kept in the crypto inventory with
+  `authenticated=false`. With the rule set, it fails the policy: the start fails in `fail` mode
+  and the `cryptoPolicy` health contributor is `DOWN`.
+- **`Context.REQUIRED` for an encrypted column.** `FieldKeys.column(name, mode,
+  Context.REQUIRED)` refuses a value written or read without a context, which would open in
+  any row. The keys and format are unchanged. Kafka and Redis use it. Elasticsearch gained
+  `encrypt(id, source)` / `decrypt(id, source)`, which bind randomized fields to their document.
+- **CRaC: any client can be registered.** `SeclumeCrac.register` took a `SeclumePool` only;
+  `register(SeclumeCrac.Suspendable)` suspends and resumes any client - MongoDB, HTTP, Redis on
+  seclume's TLS - and `closeBeforeCheckpoint(client)` closes one that cannot be suspended.
+
+### Fixed
+
+- **An X.509-SVID the agent pushes as it closes is not left in memory.** The stream gave its
+  buffer back - a window update to the agent - before it handed the decoded SVID on; when that
+  write failed, the SVID was nobody's and its key stayed in OpenSSL's memory, through every
+  checkpoint. It is handed on first now.
+- **A shredded subject stays shredded.** A read that came while `SubjectKeys.shred` was deleting
+  the key - after the cached ring was dropped, before the store's delete - loaded the key that was
+  still stored and cached its ring, and every read after the shred opened the subject's values
+  again. The cache is forgotten once more after the delete; a ring read in between is refused or
+  dropped.
+- **A password a server repeats in its refusal no longer reaches the heap.** Where the
+  password itself goes to the server - PostgreSQL's `password` (and `ldap`, `pam`, `radius`),
+  MySQL's `mysql_clear_password` and the SHA-2 plugins over TLS, an LDAP simple bind - a server
+  that answers "password authentication failed for '...'" with it, or one in the middle that was
+  given it, put the password into the exception's message: a `String` on the heap, and in every
+  log of the exception. The answer after the password is now masked in native memory before it
+  becomes text (PostgreSQL: every error and notice of the login; MySQL: every refusal of the
+  login, the secret read again for it; LDAP: the bytes after the bind, read through native
+  memory before JNDI sees them; Kafka: the broker's answer after a SaslAuthenticate request that
+  carried a secret, decrypted into native memory and masked before Kafka's buffer gets it). Mail
+  and Redis did this already.
+- **A blocking cancellation no longer holds up every other query timeout.** The deadlines of
+  all connections of a process shared one scheduler thread, and the cancellation ran on it.
+  MySQL's cancellation is a login and a `KILL QUERY`; against a busy server that login took
+  up to the connect timeout - and meanwhile no other statement's timeout fired and no kill
+  after the grace either. A query that trickled its answer was bounded by about 11 seconds
+  instead of the timeout and the grace. Cancellation and kill run on threads of their own
+  now; the same query ends after 2 seconds.
+- **A host is a name or an address, checked once for every driver and every list.** The URL's
+  first host, its failover hosts and what a cluster's topology adds: a space, a slash, an `@`,
+  a `?` or a control character in a host was taken as it stood into DNS, the TLS server name
+  and log lines. Such a URL is refused now, naming the character. An internationalized name
+  (`dbé.example`) is written in its ASCII form (`xn--db-cja.example`), as DNS and TLS take it
+  anyway.
+- **Discovery adds no host, also where nothing was given to hold it to.** `PatroniTopology.of(option)`
+  without the URL's hosts took every member Patroni's answer named; it takes none now (the
+  driver always passed the URL's hosts, so connections are unchanged). An Aurora instance
+  identifier with dots in the cluster's answer is no instance name and is ignored - it put
+  labels of the answer's choosing in front of the cluster's domain.
+- **R2DBC: a transaction left open at `close()` is rolled back before the close.** It was left
+  to what closing means underneath - a pool's return, a driver's disconnect; now its writes
+  and locks end with the connection, explicitly, before anyone else gets the session.
+- **Oracle: a value is never read past what arrived.** The last cell of a row, and a LOB
+  locator a call returned, could announce more bytes than the message held; they were framed
+  anyway, and `getString` or the next LOB call read on into what an earlier message had left
+  in the receive buffer. Both are refused now, like any answer cut short. Found by the new
+  getter fuzzing, which also found two exceptions `getString` does not promise: a time zone
+  offset beyond 18 hours (now `22009`) and a UTF-8 sequence beyond U+10FFFF. The UTF-8
+  decoder follows RFC 3629 now - overlong forms, surrogates and five-byte forms become the
+  replacement character instead of a second spelling of `/` or a quote.
+- **MySQL: getters over a hostile answer, swept and fuzzed like the other drivers'.** The
+  decoder fuzzing's seeds ended their rows in a way a modern session reads as one more row,
+  so they never reached a value; they do now.
+- **PostgreSQL: a ReadyForQuery in place of the login is refused.** A server - or whoever stands
+  between - that answered the startup message with ReadyForQuery alone was taken as logged in,
+  so neither `requireAuth` nor SCRAM's server signature was ever checked; under `tls=prefer` a
+  server in the middle was taken for the database. It is refused with 28000 at the login now,
+  and so is an AuthenticationOk that comes before SCRAM or Kerberos has finished.
+- **Oracle: a service or host name cannot add entries to the connect descriptor.** A
+  parenthesis or an equals sign in either went into the `(DESCRIPTION=...)` as it was - another
+  `SERVICE_NAME`, another address. Only letters, digits and `_ . $ # -` pass now.
+- **MySQL: a literal beyond ASCII goes as hex.** In GBK, Big5 or SJIS - by
+  `skip-character-set-client-handshake`, `init_connect` or `SET NAMES` - a lead byte swallowed
+  the escaping backslash, and a catalog pattern became SQL. Such values go as
+  `_utf8mb4 X'...'` now. A zero byte in the user or database is refused before the login answer.
+- **R2DBC: host, port and database are checked before they go into the URL.** A database named
+  `tenant_a?user=app&sts-endpoint=...` was a query of its own: the login name, an STS endpoint
+  and any option the application did not set came from whoever chose the database.
+
+- **Deadlines compared by difference, spans clamped.** Two places compared `System.nanoTime()`
+  with `<` or `>` (the pool's search for a free connection, MongoDB's SRV rescan). Such a
+  comparison is wrong wherever the clock, whose origin is arbitrary, stands near the end of its
+  range. Configured millisecond waits (CRaC quiesce, the Unix-socket provider) were multiplied
+  without a bound, so a huge value wrapped into the past. `space.seclume.internal.Deadlines`
+  does it once and right. A source rule refuses both direct comparisons and the wall clock in
+  production code, except where `SSLSession.getCreationTime` requires it.
+- **TLS traffic keys live in `SecretScope`, and SQL Server connections wipe theirs.** The own
+  stack's traffic secrets, IVs and nonces were in a plain native arena. They are in a
+  `SecretScope` now: locked, out of core dumps, counted and wiped. A KeyUpdate's next secret is
+  wiped once the new key holds it (a scratch arena was freed with it inside). Counting them
+  showed that closing a SQL Server connection closed the socket but never the TLS layer under
+  it, so its keys stayed in memory that was never freed. The layer is closed now.
+- **Log masking after a restore reads the secrets off the logging thread.** The first line
+  after a CRaC restore read every secret inside the masker's lock, so a slow vault held every
+  thread that logged. They are read on a thread of their own now. A line waits up to 2 s for
+  that, and one that cannot be checked by then is withheld rather than written unmasked. While
+  a secret cannot be read, the reading is tried again every 5 s instead of every refresh
+  interval (5 minutes). A refresh that throws no longer ends the schedule.
+- **The pool health check does not borrow from a busy pool.** With threads waiting or every
+  connection handed out, the probe waited the pool's whole timeout, took a connection a request
+  needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
+  that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
+  server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **R2DBC: a cancelled borrow over SQL Server or Oracle closes its connection.** A connection
+  lent at once is described on the lane for these drivers. A subscriber that cancelled before
+  the lane ran that left the connection borrowed and never closed (#63), and so did one that
+  cancelled while it was being described. Every connection lent is now either handed on or
+  closed.
+- **AES-GCM: a close during an encryption is safe.** The OpenSSL and CNG keys read their native
+  context several times per call. A `close()` from another thread freed it in between, a use
+  after free in the memory of the key schedule. Encrypt, decrypt and close are serialized per
+  key now, and CNG refuses a closed key by name instead of with an invalid-handle status.
+- **Kafka and AWS placeholders are random each.** They were a process nonce and a count (AWS:
+  and an identity hash), so a placeholder seen in a log named every one after it. Anybody who
+  could put text where the rewriter looks could have prepared the next login's. Each is 16
+  random bytes now, as HTTP's already were.
+- **HTTP/2: the secret goes only into a credential header, as over HTTP/1.1.** Over HTTP/2,
+  every header with a placeholder got the secret, including `X-Opaque-Id`, which Elasticsearch
+  writes into its logs and answers. Only `Authorization`, `Proxy-Authorization`, `X-Api-Key`,
+  `Api-Key` and `X-Auth-Token` get it now, plus the headers named in
+  `-Dseclume.http.credential-headers` (e.g. `x-vault-token`), on both protocols.
+- **TLS: no `connect` takes a null trust as "do not check the server".** The overloads with
+  ALPN and with the versions to offer accepted a null trust and then encrypted without
+  authenticating, unlike the others, which refuse it so that an unauthenticated connection is
+  named where it is made. They refuse it too now. `connectWithoutAuthenticating` has the
+  matching variants, and the internal callers use them for `verify=false`.
+- **PostgreSQL: a statement with a NUL character is refused before it is sent.** The protocol
+  carries a statement as a NUL-terminated string, so a NUL inside it ended the statement there
+  and the rest was read as the message's next field. It is refused now with SQLState 22023
+  before a byte of the message is written, and the connection goes on. The wire buffer refuses
+  a NUL in any NUL-terminated field as well, for MongoDB's BSON keys among others.
+- **Vault: `seclume.vault.kvMaxAgeSeconds` is read when it is needed.** It was read once, when
+  the provider class was loaded, so a setting made after that was ignored. It is now read on
+  each use, and is at least one second.
+- **Pool: housekeeping survives a driver whose `close()` throws an Error.** Closing a
+  connection for good caught only `SQLException`, and housekeeping caught `RuntimeException`
+  and `StackOverflowError`. An `AssertionError` or `LinkageError` from a driver's `close()`
+  ended the housekeeping thread, and the pool never swept or refilled again. Both catch it
+  now.
+- **TLS host names: `1.2.3.` is a name, not an IPv4 address.** A host of digits and three dots
+  was taken for an address even with an empty label.
+- **heapcheck: `--keep-dump` does not replace an existing file.** The JVM writes its dump
+  itself and refuses a path that is taken, so the file there was deleted first, whatever it
+  was. An existing path is refused now with exit 2, as `--redact` already did.
+- **heapcheck: a `--dump-dir` the process does not share is named as such.** The dump stayed in
+  the process's file system, and the check said "could not check process ... - <the missing
+  file>". It now says where the process wrote it, that `--dump-dir` must be shared (or
+  `--in-target` used), and that the dump was deleted in the process's file system.
+- **A database login past its budget says so, in all four drivers.** The budget closed the
+  connection, and the error was the read or write the close broke ("the connection failed
+  during startup: ..."). It is now a `SQLTransientConnectionException` (08001): "the login to
+  host:port did not finish within its budget of N s (seclume.loginBudgetFactor F x the connect
+  timeout of T ms)".
+- **LDAP: a Kerberos bind past its budget says so.** The budget closed the socket under the
+  bind, and the error was the write that the close broke. It is now a `SocketTimeoutException`
+  saying the server did not finish within the budget's seconds, as StartTLS already said.
+- **NATS: Options not built by `SeclumeNats.build` are refused.** `SeclumeNats.configure()`
+  names seclume's data port, and only `build()` registers the trust and the credentials. Options
+  finished with the builder's own `build()` connected with neither the pin nor the root CA and
+  the login line unfilled; that data port now refuses with a message naming `build`.
+- **SPIFFE: a warning when no `peer-ids` are set.** Every workload of the own trust domain is
+  then a peer, as SPIFFE means it; the trust is not narrowed, but the start now says so once.
+- **Azure SharedKey: names sorted as the service sorts them.** `x-ms-*` headers and query
+  parameters were sorted by code point; the service and the Azure SDK use a collation in which
+  a hyphen counts for little and an underscore sorts before a digit. Metadata such as
+  `x-ms-meta-a-b` next to `x-ms-meta-a1` got a signature the service rejected. A header value
+  with a line break or another control character is now refused instead of signed. Values are
+  otherwise signed as they stand, as the SDK signs them.
+- **`--migrate` writes only what reads back as meant.** Every URL it writes is parsed again as
+  the driver parses it; one whose options or database came back otherwise is refused with exit
+  code 2. Pool values that are not a number or a duration are reported, not copied into a
+  properties line, and a TNS alias is checked like a host. `sslpassword` was listed as "handled
+  by seclume"; it is the client key's password in the configuration, and is now reported as
+  unsafe, with `clientKey-provider` as the way to give the key.
+- **R2DBC: the driver's threads inherit no thread locals.** A lane's thread, started for one
+  subscriber's task, serves the ones after it - and took the first one's
+  `InheritableThreadLocal`s, a tenant or a principal, along to theirs. They start with none now.
+- **Log masking: two overlapping secrets are both masked whole.** Where two secrets overlapped
+  in a line, neither inside the other, the one found second was dropped, and what of it reached
+  beyond the first went out in the clear. The mask covers their union now.
+- **Terminal output escapes what a server or a dump chose.** `seclume-verify`'s text report,
+  `--print-pin`'s certificate names and heapcheck's holders (class and field names from the
+  dump) went to the terminal as they were: an ESC there drove it, a CR overwrote the line before.
+  Control characters are written as `\xNN` now; the JSON reports were escaped already.
+- **A login that finished is not closed by its budget.** The budget's task was only cancelled
+  when a login finished; one already running closed the connection the driver had just been
+  handed. Whoever takes the budget off first decides now.
+- **Spring Boot: the secret guard sees more.** A placeholder's plain default -
+  `${DB_PASSWORD:SuperSecret}`, the secret used whenever the variable is unset - was taken for a
+  reference and not reported; and names ending in `secret-key`, `access-key`, `api-key`, `pwd` or
+  `credentials` were not looked at. seclume's own `seclume.datasources.*.secret.*` settings,
+  which say where a secret lives, are still left alone.
+- **Heap dumps: links are not followed.** The sidecar took a link named like a dump for one and
+  read, redacted and deleted the file it pointed to. `seclume-heapcheck --in-target` read a
+  container's paths through `/proc/<pid>/root`, where the container's absolute links lead into
+  the host's file system; it resolves every link inside the container's root now and refuses a
+  dump that is not a regular file.
+- **MySQL under `NO_BACKSLASH_ESCAPES`.** The catalog queries doubled every backslash, and LIKE
+  there has no escape character unless one is named: a column called `a` was not found by
+  `getColumns`. The JDBC escape translation took a literal ending in a backslash for one that
+  went on, and left the escape clause after it untranslated. Both follow the session's
+  `sql_mode` now.
+- **LDAP Kerberos: a refused bind is not passed on as a success.** The bind response handed to
+  JNDI carried the server's result code in one byte: 256 arrived as 0, a successful bind. It is
+  encoded as BER encodes an integer now.
+- **Log masking: XML and HTML references read in one pass.** Each `&` looked up to 32
+  characters on for its `;`, so a line of many `&` cost 32 reads a character; the next `;` is
+  found once now. A line of 200,000 `&` is masked in about 3.6 ms instead of 8. Long lines stay
+  fully masked: there is no length past which a line goes out unread.
+- **CRaC: a pool's refused checkpoint says where the open secrets came from.** The
+  process's refusal named the places with `-Dseclume.debug.scopes=true`, or said how to find
+  them; the pool's gave the count alone.
+- **An unknown credential placeholder is a JFR event.** A request with a placeholder this
+  process never handed out was refused and logged at 1, 2, 4, 8 ...; every one is now also a
+  `space.seclume.PlaceholderRefused` event with kind, target and the count so far - never the
+  placeholder.
+- **Heap check: names from the dump stay text in the Markdown report.** Only `|` and line
+  breaks were escaped, so a class or field name - chosen by whoever wrote the dump - could put
+  a link, an image, emphasis or HTML into the report. Every Markdown character is escaped now,
+  and inside code spans a backtick can no longer end the span.
+- **`ClientIdentities.closeAll()` waits for running handshakes.** It was safe only "where no
+  handshake is running", and nothing held it to that: a handshake signing with a client
+  certificate at that moment failed half way. It waits for them now, ten seconds at most, and
+  then warns and closes anyway.
+- **MySQL: a cancellation kills nothing on another server.** `KILL QUERY` goes over a second
+  connection, and behind a load balancer that can reach another backend, where the same
+  connection id is somebody else's session. The session now knows which server it is on
+  (`@@hostname`, `@@port`, `@@server_id`, asked right after the login and read with the first
+  statement, so no extra round trip), and a cancellation whose second connection lands elsewhere
+  is refused with SQLState 0A000 instead.
+- **HTTP: a refused credential placeholder is refused at once.** The connection with the
+  half-written request stayed open, and OkHttp, reading for an early answer, waited out its read
+  timeout (ten seconds by default) before the refusal reached the application. It is closed now.
+- **SQL Server: `getLong` beyond a long is out of range, not a wrong number.** A `float` of 1e30
+  was cast to `Long.MAX_VALUE`, and a `DECIMAL(30)` beyond a long was "not a number" (22018).
+  Both are 22003 now, as in the other drivers; a fraction is still no long.
+- **A number too large for `getLong` is SQLState 22003**, not 22018. A BIGINT UNSIGNED above
+  `Long.MAX_VALUE` (MySQL, text and binary protocol) or a PostgreSQL numeric of twenty digits was
+  refused as text that is no number; it is a number out of range, and `getBigDecimal` reads it.
+- **SQL Server: `getBoolean`** on a value its converter does not take refuses with an
+  `SQLDataException` (22018) instead of letting a `NumberFormatException` out.
+- **Pool: `rotateSecret(closeIdleNow, grace)`** closes connections still lent out under the old
+  login once the grace is over. A connection held for good - a batch, a leak - kept the old login
+  until `maxLifetime`, which is what a rotation after a leaked password is meant to end.
+- **Logging: masking that masks nothing is said.** With `seclume.logging.redact=true` and no
+  seclume converter or `RedactingEncoder` in Logback's configuration, the starter warns at
+  start (`seclume.logging.redact.strict=true` refuses to start); Log4j 2's status log warns
+  about a `%redact{...}` without a stack trace word.
+- **A secret provider that fails at the login is an `SQLException`.** Its failure - a file not
+  there, Vault not reachable - left `DriverManager.getConnection` as
+  `SecretUnavailableException`, past every pool and retry that catches `SQLException`.
+- **JGit credentials can be bound to their remote.** `SeclumeGit.credentials(user, spec)`
+  bound its placeholder to the first server that asked - a submodule's host from someone
+  else's `.gitmodules`, if it asked first. `credentials(user, spec, remoteUrl)` binds it to the
+  remote's host and port.
+- **A TLS handshake has a deadline of its own**: `seclume.loginBudgetFactor` (3) times the
+  network timeout. A server that sent a byte before each read timeout ran out held it for as
+  long as it liked.
+- **MySQL, SQL Server and Oracle close a statement's connection when the server ignores its
+  cancellation** after the query timeout and a grace, as PostgreSQL did.
+- **`AccessLogVerifier.Result.vouched()`**: whether a key vouches for every entry. `holds()`
+  was true for a chain written from scratch with its checkpoints left out.
+- **A JSON answer broken before a field is an error, not that field's absence** - an expiry,
+  a lease or a renewal flag of Vault, Azure Key Vault, the metadata endpoints, SPIFFE, OAuth or
+  Google Cloud was skipped for an answer that could not be read that far.
+- **Oracle: a short ROWID or DATE is SQLSTATE 22000**, and **SQL Server: a value cut short is
+  08S01** - both used to leave the getter as an unchecked exception.
+- **Heap dump discovery looks for a discovered credential in every encoding**, and finds a
+  bare `Basic` or `Bearer` value held without its header name (`http-credential-value`).
+- **The default result limit reads the URL's options**: `maxResultRows=` in another option's
+  value (`applicationName=report-maxResultRows=5`) meant no limit.
+- **R2DBC: a result cancelled after its first row leaves no statement open** - the pool found
+  it open on every return and counted a leak.
+- **LDAP: the same server registered twice with the same `tlsPin` is the same trust**; it was
+  refused as another certificate.
+- **The TLS record layer refuses an inner plaintext beyond 2^14 + 1 bytes** on every path.
+- **The LDAP service account's placeholder is no login for a user.** Read from a heap dump and
+  typed into a login form whose user name maps to the service account's DN, it logged the user in
+  as the service account. `SeclumeLdap.serviceBindsOnly()` writes it in only for binds opened
+  through `SeclumeLdap.asService`; the starter's context source opens its own contexts so.
+- **A value bound with `setSensitive` is masked in the server's error.** PostgreSQL's
+  `DETAIL: Key (...)=(...) already exists`, MySQL's `Duplicate entry '...'` and SQL Server's
+  `The duplicate key value is (...)` quoted it, and it became a String in every log that printed
+  the exception.
+- **A Windows CNG signing key is not freed while another thread signs with it** - an access
+  violation in `ncrypt.dll`, as the OpenSSL key had been.
+- **The log masker keeps asking for an early refresh while a secret was never read**; one failed
+  read made the next one look complete.
+- **A pooled statement's `getConnection()` is the pool's handle**, not the driver's connection
+  behind it: closed there it closed under the pool, and kept it outlived the borrow.
+- **PostgreSQL refuses a column format it never asked for**; a binary claim for a text column was
+  decoded by the binary reader.
+- **DPAPI never shows a prompt** (`CRYPTPROTECT_UI_FORBIDDEN`), and **the macOS keychain's copy of a
+  secret is zeroed before it is freed**.
+- **R2DBC: a borrow cancelled while it waits gives its connection back**; maximumPoolSize such
+  cancels emptied the pool. **`setStatementTimeout` and `setLockWaitTimeout` take effect** (the query
+  timeout on every statement; `lock_timeout`, `innodb_lock_wait_timeout`, `LOCK_TIMEOUT`); they
+  answered success and set nothing. Oracle has no session lock timeout and says so.
+- **CRaC and SnapStart without a seclume pool**: wiping, the wait for open secrets and keys, the
+  hold and OpenSSL's reseed after the restore ran only inside a pool's resource. An application
+  using seclume for TLS alone got none of it, and every clone of its image drew the same random TLS
+  key shares. They are a process resource of their own, registered when `seclume-crac` loads
+  (`SeclumeCrac.registerProcess()` says so in code).
+  A checkpoint is also refused while a TLS connection of seclume's own stack is open - a MongoDB
+  pool, HTTP keep-alive, a Redis or Kafka client - and the message names who opened it.
+- **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
+  `StatementListener`**, nor its failure as a failed statement the application never ran.
+
+- **The security gate asks for every method of a security test, not for one passing case.** One
+  passing case named anything used to count as PASS, so a gated test reduced to a placeholder
+  still let the build through. `.github/security-gate.json` now lists each entry's `methods`
+  (`gate_methods.py`), and on a pull request the gate runs with the base branch's manifest and
+  script (`trusted_gate.sh`).
+- **CI fails on a checksum that does not match, and on a new input fetched by name alone.**
+  Every workflow that runs Maven sets `MAVEN_ARGS=--strict-checksums`; a mismatching dependency
+  or plugin used to be a warning. `pinned_inputs.py --check` (core job) fails on a container
+  image without a digest, a Maven distribution without `distributionSha256Sum`, or an archive
+  checked only against a checksum from the same server - unless `.github/unpinned-inputs.json`
+  lists it, and that list may only shrink. `pinned_inputs.py --pin` pins the listed images.
+- **heapcheck: no "nothing found" for a check that looked for nothing.** A recording that names
+  no secret, checked without `--secret-file`, `--secret-dir` or `--discover`, exited 0; it is
+  now a misuse (exit 2).
+- **heapcheck leaves no management agent behind.** The dump is taken through `jcmd` first; the
+  process's JMX agent is used only when it runs already, and started only without a `jcmd`, with
+  a warning: once started, it stays open in the process until it ends.
+- **heapcheck leaves no dump in another container.** A process in another mount namespace,
+  checked without `--in-target`, wrote its dump into its own `/tmp`, where it stayed when the
+  check failed to find it. That is refused before the dump now; with `--dump-dir`, a dump the
+  process wrote out of this check's sight is deleted through `/proc/<pid>/root`.
+- **Mail and LDAP logins have a time limit as a whole.** The read timeout was per read: a server
+  that sent a byte just before each read ran out - or anyone on the path before STARTTLS - held
+  an SMTP, IMAP or POP3 login, and JNDI's connect through StartTLS and the handshake, for good.
+  Each now has `seclume.loginBudgetFactor` (3) times the read timeout; `timeout=0` still waits.
+- **Secret fetches time out.** The timeout a secret provider gives - Vault, AWS, Azure, GCP,
+  their KMS, the metadata services - was the connect's only: a server that took the
+  connection and said nothing held the TLS handshake and the answer, and every login waiting for
+  the secret, for good. It is the read timeout as well now, and the whole exchange has
+  `seclume.loginBudgetFactor` (3) times it.
+- **`SeclumeRedisSocketFactory`'s timeout covers the TLS handshake.** It was set after it, so a
+  silent `rediss://` server held Jedis's `createSocket` for good.
+- **`SeclumeSslSocketFactory.createSocket(host, port)` bounds its handshake.** It makes the TCP
+  connection itself, and `connectTimeout` bounded only that: a server that took the connection
+  and said nothing held the TLS handshake for good. `connectTimeout` bounds each read of the
+  handshake now; the socket is handed out without a read timeout, as before.
+- **`SeclumeS3Presigner` takes bucket names only.** A bucket is the first label of the host of
+  a virtual-host style URL, and was put there as it was: `evil.example#` made a presigned URL
+  that points at `evil.example`. A name S3 would not take is refused, as the SDK's presigner
+  refuses it.
+- **A literal no longer comes out in a statement's fingerprint.** A backslash before a quote
+  was taken for an escape in every dialect. A literal ending in one - `'C:\data\'`, a SQL
+  Server backup path - then ran on to the quote that opened the next literal, and that one's
+  contents - a password - went into JFR events, trace spans (`db.query.text`), metric tags and
+  the drivers' messages as words. A quoted identifier ending in a backslash, `"col\"`, copied the
+  rest of the statement, literals and all, verbatim. Identifiers take a backslash for what it
+  is; `E'...'` for an escape; and where the dialect and its settings decide - MySQL's
+  `NO_BACKSLASH_ESCAPES`, PostgreSQL's `standard_conforming_strings` - the rest of the statement
+  is masked.
+- **`JdbcUrl.redact` hides a password whole, whatever its characters.** Before the query, a value
+  ended at any of `; , ( )`: a SQL Server password with a `(`, `,` or `"` in it was cut there and
+  the rest shown, and a MySQL key-value password at its `;`. And a `//` inside an Oracle
+  password in quotes was taken for an authority, so the whole password was shown. Values end
+  now as the syntax around them says - `;` at the top level, `,` and `)` inside parentheses -
+  and both readings of a `//` in quotes are hidden. Redacted URLs are what refusals,
+  `seclume-verify --migrate` and the logs print.
+- **The log masker finds a secret however an encoder wrote it.** It looked for a secret
+  percent-encoded only as RFC 3986 strictly or as `URLEncoder` encode it, and JSON-escaped only
+  as `\"` and `\\`. But most URL builders encode only what their part of a URL does not allow -
+  `java.net.URI`, Spring, OkHttp: `p@ss%20word` - and Gson escapes `= ' < > &` as backslash-u
+  sequences by default: with a special character in it, about half of the passwords written so
+  went to the log unmasked. A line with `%`, `+` or a backslash is now also read decoded, in
+  native memory, and a secret found there is masked where it stands.
+- **PostgreSQL: a `?` in an escape string is text.** `E'it\'s ?'` was read as a plain literal
+  that ended at the escaped quote, so the `?` in it became `$1` and a real `?` after it stayed as
+  it was - an unterminated literal, or a statement the server refused. Values are bound on the
+  server, so no value ever went into the text.
+- **A heap dump's redaction, and heapcheck, find a secret in the forms an application leaves it
+  in.** A named secret was looked for as itself, UTF-16, Latin-1 and its own Base64. In an
+  `Authorization: Basic` header its Base64 starts at whatever offset the user name leaves - for
+  `svc:` or `abcd:` nothing like the password's own - and URL-safe Base64, percent-encoded and
+  JSON-escaped copies were not looked for either: the redacted copy kept them, its own check
+  passed, and `heapcheck` said NOT FOUND for a process holding a password in a header only. The
+  same for the application's own secrets behind `/actuator/heapdump`. One list of encodings
+  (`SecretEncodings`) now serves the search, the check after a redaction, the native patterns of
+  the application's secrets and the TCK's heap scanner.
+- **The log masker finds a secret in XML and HTML output.** `java.util.logging`'s
+  `XMLFormatter`, one of the two delegates `RedactingFormatter` names, writes `&`, `<` and `>`
+  as `&amp;`, `&lt;` and `&gt;`; Log4j 2's `%enc{...}{XML}` and `{HTML}` and XML layouts
+  escape quotes too. A secret with one of these characters went to the log unmasked. A line
+  with `&` is now also read with its character references resolved - the five named ones and
+  numeric ones in decimal or hex.
+- **Logback output is masked under every word Spring Boot and Logback write a message or a
+  stack trace with.** The documented rules replaced only `%msg` and `%xEx`. Spring Boot's
+  patterns write `%m` and `%wEx`, so with `logback-spring.xml` as documented neither message
+  nor stack trace was masked; `%ex`, `%throwable`, `%rEx` and `%message` were not either, nor
+  the stack trace Logback adds to a pattern that has none, nor a JSON encoder's output.
+  `<include resource="space/seclume/logging/logback/redact-rules.xml"/>`, after Spring
+  Boot's `defaults.xml` or `base.xml`, registers masking converters for all of them, and
+  `RedactingEncoder` masks a whole line - a pattern's, MDC and the added stack trace
+  included, or another encoder's.
+
+### Documentation
+
+- **A Kafka value is not bound to its record's key, nor a Redis value to its key** unless it is
+  written with `EncryptedCodec.encodeValueFor`. Within a topic or a name, whoever can write to
+  the broker or to Redis can copy one key's value under another.
+- **A JPA-converted value is not bound to its row.** `EncryptedStringConverter` and
+  `EncryptedBytesConverter` cannot use a context - a converter is not told its entity - so a
+  value copied by someone who can write to the table into another row of the same column is
+  read there as that row's. ENCRYPTION.md and the converters say so now, with `Sealed` sealed
+  with the row's id for values whose place matters.
+
 ## [0.14.0] - 2026-11-18
 
 ### Upgrading: what changes behaviour

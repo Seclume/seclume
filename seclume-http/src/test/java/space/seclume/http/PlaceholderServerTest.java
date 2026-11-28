@@ -123,6 +123,7 @@ class PlaceholderServerTest {
         IOException refused = assertThrows(IOException.class,
                 () -> rewritten(bearer(forged), "git.example.com:443"));
         assertTrue(refused.getMessage().contains("did not hand out"), refused.getMessage());
+        assertTrue(CredentialPlaceholders.unknownSeen() > 0, "refused without being counted");
     }
 
     @Test
@@ -163,6 +164,36 @@ class PlaceholderServerTest {
         assertTrue(elsewhere.contains("Bearer " + placeholder), elsewhere);
     }
 
+    /**
+     * Over HTTP/2 every header with a placeholder got the secret - x-opaque-id
+     * too, which Elasticsearch writes into its logs and sends back. Only the
+     * credential headers do now, as over HTTP/1; another is added by name.
+     */
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock(
+            org.junit.jupiter.api.parallel.Resources.SYSTEM_PROPERTIES)
+    void overHttp2OnlyACredentialHeaderGetsTheSecret() throws IOException {
+        String placeholder = SeclumeSslSocketFactory.placeholder(spec);
+        String echoed = sentOverHttp2("api.example.com:443", "x-opaque-id", placeholder);
+        assertTrue(!echoed.contains(SECRET) && echoed.contains(placeholder), echoed);
+        String vault = sentOverHttp2("api.example.com:443", "x-vault-token", placeholder);
+        assertTrue(!vault.contains(SECRET), "a header nobody named: " + vault);
+        String before = System.getProperty(HttpFraming.EXTRA_HEADERS);
+        System.setProperty(HttpFraming.EXTRA_HEADERS, "x-goog-api-key, X-Vault-Token");
+        try {
+            assertTrue(sentOverHttp2("api.example.com:443", "x-vault-token", placeholder)
+                    .contains(SECRET), "a header named by seclume.http.credential-headers");
+            assertTrue(!sentOverHttp2("api.example.com:443", "x-opaque-id", placeholder)
+                    .contains(SECRET));
+        } finally {
+            if (before == null) {
+                System.clearProperty(HttpFraming.EXTRA_HEADERS);
+            } else {
+                System.setProperty(HttpFraming.EXTRA_HEADERS, before);
+            }
+        }
+    }
+
     private static final byte[] PREFACE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
             .getBytes(StandardCharsets.US_ASCII);
 
@@ -175,11 +206,16 @@ class PlaceholderServerTest {
     }
 
     private static String sentOverHttp2(String placeholder, String server) throws IOException {
+        return sentOverHttp2(server, "authorization", "Bearer " + placeholder);
+    }
+
+    private static String sentOverHttp2(String server, String header, String value)
+            throws IOException {
         ByteArrayOutputStream block = new ByteArrayOutputStream();
         literal(block, ":method", "GET");
         literal(block, ":scheme", "https");
         literal(block, ":path", "/v1/things");
-        literal(block, "authorization", "Bearer " + placeholder);
+        literal(block, header, value);
         byte[] fields = block.toByteArray();
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
         wire.writeBytes(PREFACE);

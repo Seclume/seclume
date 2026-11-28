@@ -1,11 +1,9 @@
 package space.seclume.kafka;
 
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.HexFormat; // seclume-allow: a random nonce for placeholders - public
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 import space.seclume.secret.SecretScope;
 
@@ -21,11 +19,7 @@ import space.seclume.secret.SecretScope;
  */
 final class SaslPlaceholders {
 
-    private static final SecureRandom RANDOM = new SecureRandom();
-
     static final byte[] PREFIX = "seclume-kafka-".getBytes(StandardCharsets.US_ASCII); // seclume-allow: the placeholder prefix, no secret
-    private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce - public
-    private static final AtomicLong NEXT = new AtomicLong();
     private static final Map<String, SecretScope> WAITING = new ConcurrentHashMap<>();
 
     private SaslPlaceholders() {
@@ -33,9 +27,14 @@ final class SaslPlaceholders {
 
     /** Puts {@code secret} under a new placeholder, which is returned. */
     static String register(SecretScope secret) {
-        String placeholder = new String(PREFIX, StandardCharsets.US_ASCII) + NONCE + "-" // seclume-allow: the placeholder, not the secret
-                + NEXT.incrementAndGet();
-        WAITING.put(placeholder, secret);
+        // Random each, not a process nonce and a count: one placeholder seen
+        // in a log named every one after it, and whoever could put text where
+        // the rewriter looks could have prepared the next login's.
+        String placeholder;
+        do {
+            placeholder = new String(PREFIX, StandardCharsets.US_ASCII) // seclume-allow: the placeholder, not the secret
+                    + HexFormat.of().formatHex(nonce());
+        } while (WAITING.putIfAbsent(placeholder, secret) != null);
         return placeholder;
     }
 
@@ -50,8 +49,8 @@ final class SaslPlaceholders {
     }
 
     private static byte[] nonce() {
-        byte[] bytes = new byte[12];
-        RANDOM.nextBytes(bytes);
+        byte[] bytes = new byte[16];
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }

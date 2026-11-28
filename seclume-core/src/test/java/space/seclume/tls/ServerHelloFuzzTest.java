@@ -38,6 +38,23 @@ class ServerHelloFuzzTest {
         }
     }
 
+    /**
+     * TLS 1.2 alone - as TDS 7.4 offers it. There the Certificate, the
+     * ServerKeyExchange and ServerHelloDone come in the clear, before any key:
+     * more for anybody in the middle to shape. The seed is a well-formed
+     * flight up to ServerHelloDone.
+     */
+    @FuzzTest(maxDuration = "60s")
+    void aHostileTls12FlightFailsWithAnIoException(byte[] server) {
+        try {
+            TlsConnection connection = ClientHandshake.connectWithoutAuthenticating(
+                    new Replay(server), "db.example", null, null, ClientHello.Offer.TLS12);
+            connection.close();
+        } catch (IOException expected) {
+            // what a hostile answer has to end in
+        }
+    }
+
     @FuzzTest(maxDuration = "60s")
     void aHostileEncryptedFlightNeverConnectsUnauthenticated(byte[] input) throws Exception {
         if (!TestCertificates.available()) {

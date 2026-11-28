@@ -66,7 +66,7 @@ class SessionContextTest {
                         ".local-mssql-password", "app.tenant_id",
                         "select cast(session_context(N'app.tenant_id') as nvarchar(100))", false),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
-                        + "?user=seclume_test", ".local-oracle-password", "client_identifier",
+                        + "?tls=off&user=seclume_test", ".local-oracle-password", "client_identifier",
                         "select sys_context('USERENV', 'CLIENT_IDENTIFIER') from dual", false));
     }
 
@@ -137,7 +137,37 @@ class SessionContextTest {
         }
     }
 
-    private static PoolSettings settings() {
+    /**
+     * SQL Server: the tenant is set read-only, so an SQL injection later in
+     * the same borrow cannot rewrite it with a sp_set_session_context of its
+     * own; the reset on return still clears it for the next borrower.
+     */
+    @org.junit.jupiter.api.Test
+    void sqlServersTenantCannotBeRewrittenWithinTheBorrow() throws Exception {
+        Db db = databases().get(2);
+        PoolSettings settings = settings();
+        settings.setSessionContext(() -> Map.of(db.key(), "acme"));
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings)) {
+            try (Connection connection = pool.getConnection();
+                 Statement statement = connection.createStatement()) {
+                assertEquals("app.tenant_id", db.key());
+                assertThrows(SQLException.class, () -> statement.execute(
+                        "exec sp_set_session_context N'app.tenant_id', N'evil'"));
+                try (ResultSet rows = statement.executeQuery(db.read())) {
+                    rows.next();
+                    assertEquals("acme", rows.getString(1));
+                }
+            }
+            try (Connection again = pool.getConnection();
+                 Statement statement = again.createStatement();
+                 ResultSet rows = statement.executeQuery(db.read())) {
+                rows.next();
+                assertEquals("acme", rows.getString(1), "set again for the next borrow");
+            }
+        }
+    }
+
+    static PoolSettings settings() {
         PoolSettings settings = new PoolSettings();
         settings.setName("context");
         settings.setMaximumPoolSize(1);
@@ -145,7 +175,7 @@ class SessionContextTest {
         return settings;
     }
 
-    private static String url(Db db) {
+    static String url(Db db) {
         Path password = null;
         for (Path candidate : List.of(Path.of(db.passwordFile()), Path.of("..",
                 db.passwordFile()))) {
@@ -168,7 +198,7 @@ class SessionContextTest {
     }
 
     /** A pool wants a {@code DataSource}; a driver wants a URL. */
-    private record UrlSource(String url) implements DataSource {
+    record UrlSource(String url) implements DataSource {
 
         @Override
         public Connection getConnection() throws SQLException {

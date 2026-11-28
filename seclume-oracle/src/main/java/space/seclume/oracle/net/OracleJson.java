@@ -65,6 +65,15 @@ public final class OracleJson {
     private boolean relativeOffsets;
     private int fieldIdLength;
     private final List<String> fieldNames = new ArrayList<>();
+    /**
+     * A tree visits each node once, and a node is at least a byte: more visits
+     * than bytes is a child offset pointing back up or at a node shared by
+     * many parents - recursion without end, or text that doubles per level
+     * (17 bytes were a StackOverflowError, 206 an OutOfMemoryError).
+     */
+    private long visits;
+    private int depth;
+    static final int MAX_DEPTH = 256;
 
     private OracleJson(MemorySegment in, long at, int length) {
         this.in = in;
@@ -163,6 +172,10 @@ public final class OracleJson {
     }
 
     private void node(StringBuilder out) throws SQLException {
+        if (++visits > end - start) {
+            throw new SQLException("the JSON value refers to its nodes more often than it has "
+                    + "bytes - a cycle or shared nodes, which no OSON tree has", "22000");
+        }
         int type = u8();
         if ((type & 0x80) != 0) {
             container(type, out);
@@ -236,6 +249,9 @@ public final class OracleJson {
                 offsets = pos;
             }
         }
+        if (++depth > MAX_DEPTH) {
+            throw new SQLException("the JSON value nests deeper than " + MAX_DEPTH, "22000");
+        }
         out.append(object ? '{' : '[');
         for (long i = 0; i < children; i++) {
             if (i > 0) {
@@ -266,6 +282,7 @@ public final class OracleJson {
             node(out);
         }
         out.append(object ? '}' : ']');
+        depth--;
     }
 
     private long count(int childrenBits) {
@@ -301,7 +318,7 @@ public final class OracleJson {
     }
 
     /** A date or a timestamp, as json_serialize writes it: ISO text in quotes. */
-    private void moment(int length, StringBuilder out) {
+    private void moment(int length, StringBuilder out) throws SQLException {
         String text = OracleDate.toText(in, pos, length).replace(' ', 'T');
         pos += length;
         if (length >= OracleDate.DATE_LENGTH + 4) {

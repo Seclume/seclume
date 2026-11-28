@@ -38,7 +38,11 @@ providers each have a page of their own: [TLS.md](TLS.md),
   server called it, and the connection is still usable afterwards. **MySQL does not fail a
   cancelled statement**: a killed `SLEEP()` returns 1 and the call succeeds. Code written
   against PostgreSQL's behaviour would accept a partial answer there. `setQueryTimeout`
-  handles this; a hand-written `cancel()` has to handle it itself.
+  handles this; a hand-written `cancel()` has to handle it itself. **MySQL's `KILL QUERY` goes
+  over a new connection to the configured host** and names the session by its id: behind a
+  router or load balancer with several backends, that connection can land on another server,
+  where the same id may be someone else's session of the same user. Point the URL at one
+  server, or turn query timeouts off, behind such a balancer.
 
 ## Oracle only
 
@@ -61,6 +65,11 @@ providers each have a page of their own: [TLS.md](TLS.md),
   - **Keys:** agreed by Diffie-Hellman on the group the server sends. The private exponent,
     the shared secret, the AES keys and the checksum keystream all stay in native memory, and
     the exponent is used in constant time.
+  - **Not authenticated.** The Diffie-Hellman exchange proves nothing about who answers: anybody
+    in the middle can run one exchange with the client and another with the server and read
+    everything, as with `tls=require`. The O5LOGON login still does not hand the password over,
+    but the session is not private from such a party. Where that matters, use TCPS with
+    `tls=verify-full` or `tlsPin`.
   - **A session that moves** to another host is refused under native encryption: its
     checksum keystream cannot leave the process. Use TCPS on seclume's own TLS instead.
   - **Shown** against Oracle Free 23 with both settings REQUIRED (AES256, SHA256,
@@ -212,7 +221,10 @@ providers each have a page of their own: [TLS.md](TLS.md),
 - **Behind PgBouncer or RDS Proxy.** Prepared statements work behind PgBouncer 1.21 and
   later in transaction mode. With `proxyMode=transaction`, read-only and the isolation level
   travel in each transaction's own `BEGIN` instead of being set on the shared server
-  session, where they would reach the next client.
+  session, where they would reach the next client. MySQL behind ProxySQL or RDS Proxy and SQL Server behind a
+  multiplexing proxy have no such mode: there the session context and session settings of one
+  client can reach the next, so pin the connection (`multiplexing=0` in ProxySQL) or keep
+  tenants apart in other ways.
 - **CockroachDB and YugabyteDB** run on the PostgreSQL driver, each with a password:
   CockroachDB over TLS with SCRAM-SHA-256, YugabyteDB with md5. The tests assert which method
   the server asked for, so neither can quietly stop asking.
@@ -254,6 +266,24 @@ providers each have a page of their own: [TLS.md](TLS.md),
   transaction, keeps an ordinary failure, because its outcome is known. This is shown on all
   four against a relay that lets the COMMIT through and drops the answer: the client is told
   "unknown", and the row is there.
+
+## Time limits
+
+A server that answers slowly, or a byte at a time, holds a thread for as long as nothing
+bounds it - a network timeout counts only silence. Each wait below has a bound of its own,
+set by a system property:
+
+| Property | Default | Bounds |
+|---|---|---|
+| `connectTimeout` (URL option) | per driver | the TCP connect, and each read during the login |
+| `seclume.loginBudgetFactor` | `3` | the whole login - TLS handshake, authentication, a secret fetched for it - at its base timeout times this factor (at least once it), however steadily the server dribbles. One factor for every base: a database login's connect timeout, a TLS handshake's network timeout, a mail or LDAP login's read timeout, a secret fetch's own timeout - each counts silence, the factor bounds the whole. A database login stopped by it fails with `SQLTransientConnectionException` (08001) saying it did not finish within its budget of N s, with the factor and the connect timeout |
+| `seclume.queryTimeoutGraceSeconds` | the query timeout itself, 2 to 30 s | how long after a query timeout's cancellation the statement may still run before the connection is closed - for a server that ignores the cancellation |
+| `seclume.pool.probeSeconds` | `5` | the pool's own questions on a new connection (how many sessions the server allows, its idle limit); a connection whose question ran out of time is closed and not lent |
+| `seclume.vault.kvMaxAgeSeconds` | `60` | how old a Vault KV secret, which has no lease, may get before it is read again; a leased secret follows its lease |
+
+The login budget's base is one setting with two meanings: for the drivers it is the connect
+timeout; for an HTTPS secret fetch (`timeout-millis`), LDAP and mail it is the read timeout,
+which for them also bounds every read after the login.
 
 ## Secrets in columns, not only in the login
 
@@ -377,11 +407,30 @@ message names the oldest holders. Beyond that, what matters is what a connection
   `SeclumeSessionContext` bean in Spring, every borrow gives the connection the context of the
   moment, such as `app.tenant_id` for a row-level security policy, and the reset on return
   takes it off. On PostgreSQL and MySQL it rides with the first statement at no cost. See
-  `space.seclume.SessionContext` for where each database keeps it.
+  `space.seclume.SessionContext` for where each database keeps it. Under R2DBC the borrowing
+  thread is an event loop or a thread of the pool's, so the tenant comes from the Reactor
+  context instead: `SeclumeConnectionFactory.withSessionContext(...)`, or a
+  `ReactiveSessionContext` bean in Spring.
+  **A convenience, not a boundary, on PostgreSQL and MySQL:** the tenant is a session variable
+  there (`app.tenant_id`, `@tenant_id`), and any statement of the borrow - an SQL injection
+  among them - can set it to another tenant's. SQL Server's is set read-only
+  (`sp_set_session_context ..., @read_only = 1`) and cannot be changed within the borrow; Oracle's
+  is the client identifier, which a statement can change too. Where a policy must hold against
+  the application's own SQL, give each tenant its own database role and log in as it.
+- **Another vendor's driver gets a reset of the configuration's choosing.** seclume's drivers
+  reset a used session on return; a foreign driver has no such reset, and one borrower's
+  `SET ROLE`, settings and temporary tables went to the next. `PoolSettings.setResetSql(...)`
+  (`DISCARD ALL`, say) runs on every used connection's return instead; a reset that fails
+  closes the connection.
 - **Statements left open are closed on return.** Each one is a server cursor on Oracle
   (`ORA-01000` after enough of them) and result memory on the others. They are logged with
   their fingerprint; with `leak-detection-threshold` set, the log also shows where each
   statement was made.
+- **What `unwrap` returns belongs to the borrow.** `connection.unwrap(PgConnection.class)` is
+  the driver's own connection, not the pool's handle; kept past `close()`, it would run in the
+  session of whoever borrows that connection next. Back in the pool, a seclume driver
+  connection refuses every call that reaches the server (`08003`). Do not keep it longer than
+  the borrow: once the connection is lent again, the driver cannot tell the two apart.
 - **Shutting down in order.** On close, as on SIGTERM, nothing new is lent and idle
   connections go at once. Borrowed ones get up to `shutdown-timeout` (10 s) to come back, so
   a running transaction is finished rather than cut. Only stragglers after that are cut, and
@@ -406,9 +455,15 @@ message names the oldest holders. Beyond that, what matters is what a connection
   with it. `maxResultBytes=0` switches the limit off. The drivers themselves keep what the URL
   says.
 
-**Checkpoint and restore (CRaC, Lambda SnapStart).** `seclume-crac` registers a pool so that it
+**Checkpoint and restore (CRaC, Lambda SnapStart).** With Spring Boot and Quarkus, putting
+`seclume-crac` on the class path is all it takes: the starter registers the process's part and
+every seclume pool in the context, and the Quarkus extension the process's part (its pool is
+Agroal). Elsewhere: `seclume-crac` registers a pool so that it
 gives up every connection before a checkpoint and logs in afresh after the restore. Without it
-CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint it also:
+CRaC refuses the checkpoint over the pool's open sockets. Any other client on seclume's TLS -
+MongoDB, HTTP, Redis - is registered the same way with `SeclumeCrac.register(Suspendable)`
+(suspended before, resumed after) or `SeclumeCrac.closeBeforeCheckpoint(client)`; one left
+open refuses the checkpoint, naming who opened it. Before the checkpoint it also:
 
 - **waits** until no connection is borrowed and no secret is open, and refuses the checkpoint
   if that does not happen within `seclume.crac.quiesceMillis` (10 s);
@@ -428,12 +483,20 @@ CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint 
   image like any other;
 - **holds new secrets back** from that moment until the restore, so a login that starts in
   between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
-  this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).
+  this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits - then it is
+  refused, and the hold stays until the restore or the abort, since the image may still be
+  being written; `seclume.crac.holdExpiry=release` ends the hold instead, with a warning).
+  `seclume-crac/proof/run-hold.sh` shows it on a CRaC JDK with a resource slower than the hold.
 
 After the restore, OpenSSL's random generator is reseeded from the operating system before
 any new secret is made: otherwise every instance started from one image would begin with the
 same generator state, and draw the same ephemeral key shares. With it the image was searched
-and holds no password; `seclume-crac/proof` repeats that search on a CRaC JDK.
+and holds no password; `seclume-crac/proof` repeats that search on a CRaC JDK. After the restore
+it reseeds OpenSSL's random generator, which makes the TLS key shares and ECDSA nonces: a
+snapshot that keeps the process id - a VM snapshot, Lambda SnapStart - would otherwise restore
+the generator's state twice and draw the same keys twice. `seclume-crac/proof/run-random.sh`
+restores one image twice and compares the bytes drawn (27.11.2026: different with seclume
+registered; in a container the pid changes, so OpenSSL also reseeds on its own there).
 
 ## Several servers, and which one to take
 
@@ -454,6 +517,10 @@ connect over an unanswered question would turn a working cluster into an outage.
 **Or ask the cluster, with `patroni=`.** For a cluster managed by Patroni, the driver asks the
 REST API (`/cluster`) where the leader and the replicas are before it connects, instead of
 trying hosts until one answers the right way. If no endpoint answers, the URL's hosts are used.
+A member is only connected to if it is one of the URL's hosts, or if its address is in a range
+named by `patroniHosts=10.0.0.0/24,fd00::/8` (Patroni usually names members by address). An
+endpoint without a scheme is asked over `https`. `http://` is used where the URL says so, with a
+warning: whoever can write the answer on the way chooses among the URL's servers.
 
 **Aurora, with `aurora=true`.** An Aurora cluster endpoint is a DNS name for the writer. After a
 failover it keeps pointing at the old writer for as long as resolvers cache it. Every Aurora
@@ -905,7 +972,10 @@ has to reach the wire. With Kafka's own modules it passes through Kafka's reques
 then the JDK's TLS engine on the way, heap buffers that are never wiped. `seclume-kafka` puts
 Kafka's TLS on seclume's own TLS 1.3 stack and gives Kafka a placeholder instead of the secret.
 As the SaslAuthenticate request is encrypted, the engine writes the secret in the placeholder's
-place from native memory, along with the two lengths that follow from it:
+place from native memory, along with the two lengths that follow from it. It does so only for a
+broker in the domains of `bootstrap.servers`, or under a suffix in
+`seclume.kafka.allowed-brokers`: the cluster's metadata names every broker the client then logs
+in to, and one announced elsewhere gets no password or token.
 
 ```properties
 security.protocol=SASL_SSL
@@ -1012,9 +1082,14 @@ written in the placeholder's place, together with its RESP length, just before i
   sees a plain connection. Each node's engine checks that node's own certificate and host name or
   IP address (`tlsRootCert=`, `tlsPin=`) — whether it is a seed node, a cluster shard discovered
   on topology refresh or redirect, a Sentinel, or the master Sentinel resolves — and puts the
-  password into the cipher from native memory.
+  password into the cipher from native memory: for the URL's hosts and those `cluster-hosts=` or
+  `master-hosts=` allow (a host, an IP, a `.suffix`, `*` for any). A node discovery names beyond
+  them gets the placeholder, and a forged redirect gets no password.
 - over `redis://` and `redis-sentinel://`, by the first handler before the socket, which hands the
-  socket a direct buffer over the native memory and wipes it once the socket has taken it.
+  socket a direct buffer over the native memory and wipes it once the socket has taken it. A
+  Redis Cluster over plain `redis://` is refused unless the URL says `allow-plain-discovery=true`:
+  its nodes come from `CLUSTER SLOTS` and `MOVED` answers that anybody on the way can write, and
+  with no certificate to check, the data would go where they say.
 
 Only into the password argument of `AUTH` or `HELLO ... AUTH`: the rewriter follows the RESP
 commands from the connection's first byte, and a placeholder anywhere else - a value an
@@ -1239,6 +1314,12 @@ found, and the control (the token read into a `String` on purpose) is. The proto
 way a body ends, connection reuse, the retry, the origin rule, a wrong certificate) is covered
 by `SeclumeHttpTest`, `SpringRestClientTest` and `OAuthClientCredentialsTest`.
 
+**A placeholder is not a secret, and not a field for user data.** The placeholder that stands
+in for the credential is replaced only in the credential headers (`Authorization`,
+`Proxy-Authorization`, `X-API-Key`, `api-key`, `X-Auth-Token`) - never in the request line, a
+cookie, a referer or a body. Written anywhere else, it is sent as it is. Keep it to the
+credential's place, and out of headers that carry what a user typed.
+
 ## Signing keys: JWT and webhooks
 
 `seclume-jwt` signs with a key that stays off the heap. A heap dump holding the key that
@@ -1267,7 +1348,9 @@ webhooks.verifyStripe(request.getHeader("Stripe-Signature"), body, Duration.ofMi
   there. So OpenSSL 3 on 64-bit Linux and macOS or CNG on Windows; HMAC works everywhere.
 - **Verifying** tokens signed with this HMAC key takes the algorithm from the key, never from
   the token (`alg: none` and a swapped algorithm are refused). It compares in constant time
-  and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). Tokens signed
+  and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). A token without
+  `exp` is refused unless the spec says `require-exp=false`, and `max-lifetime=` seconds
+  bounds `exp - iat`, with both required. Tokens signed
   with a private key are checked with the public key, which is no secret, so any JWT library
   can do that.
 
@@ -1404,7 +1487,8 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
 
 - **Settings:** `socket` (else `SPIFFE_ENDPOINT_SOCKET`; `unix://` only - a TCP Workload API
   is refused), `timeout-millis` (10 s), `peer-ids` - the SPIFFE IDs a peer may have, comma
-  separated; without it any workload of a trust domain it has a bundle for - `name`, what it
+  separated; without it any workload of the workload's own trust domain, and a federated
+  domain's only where `peer-ids` names it (a warning at start says so) - `name`, what it
   is listed as (else its SPIFFE ID; a Spring bundle's name), and `stream` (`true`).
 - **Served by Tomcat** as well: `seclume.server.ssl.bundle=mesh` with
   `seclume.server.ssl.client-auth=need` is mutual TLS between workloads on the embedded
@@ -1557,7 +1641,11 @@ OpenSearchClient os = SeclumeOpenSearch.client(
   ports, and on no other - a placeholder sent elsewhere goes as the placeholder.
 - **Bodies are not touched:** a document that contains a placeholder is stored with the
   placeholder; nor is the request line (or HTTP/2's `:path`), where applications put what their
-  users typed. Only the header lines of request heads are rewritten - which is why the engine follows the HTTP/1.1
+  users typed. Only the credential header lines of request heads are rewritten - `Authorization`,
+  `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`, and any header named in
+  `-Dseclume.http.credential-headers=x-vault-token,...`. Every other header goes with its
+  placeholder, over HTTP/1.1 and HTTP/2 alike, so input an application copies into `X-Opaque-Id`
+  or a tracing id never carries the secret. The engine follows the HTTP/1.1
   framing (`Content-Length`, chunks) and offers no ALPN, so the clients stay on HTTP/1.1.
 - **The URL:** `auth=apikey` (the encoded key, `base64(id:key)`, as Elasticsearch hands it
   out), `auth=bearer`, or `auth=basic` with the user before the `@`; any secret provider;
@@ -1753,25 +1841,30 @@ TLS 1.3 with a key held off the heap (see
 ```java
 HttpTransport.setConnectionFactory(SeclumeGit.connections("tlsRootCert=/etc/git-ca.pem"));
 Git.cloneRepository().setURI("https://git.example.com/app.git")
-        .setCredentialsProvider(SeclumeGit.credentials("deploy", "provider=file&path=/run/secrets/git-token"))
+        .setCredentialsProvider(SeclumeGit.credentials("deploy",
+                "provider=file&path=/run/secrets/git-token", "https://git.example.com/app.git"))
         .call();
 ```
 
 The password or access token goes into JGit's Basic login as a placeholder. It is written in
-native memory when the request leaves - for the host of the first request only: JGit gives the
-same login to a submodule's host and after a redirect, and there the placeholder goes, not the
-token.
+native memory when the request leaves - for the remote's host and port only: JGit gives the same
+login to a submodule's host and after a redirect, and there the placeholder goes, not the token.
+Without the remote URL, the secret is bound to the first server that asks for it.
 
 ### gRPC: `seclume-grpc`
 
 ```java
 ManagedChannel channel = SeclumeGrpc.channel("api.example.com", 443, "").build();
-CallCredentials token = SeclumeGrpc.bearer("provider=file&path=/run/secrets/token");
+CallCredentials token = SeclumeGrpc.bearer("provider=file&path=/run/secrets/token",
+        "api.example.com:443");
 stub.withCallCredentials(token).call(request);
 ```
 
 - **Transport:** the channel is gRPC's OkHttp transport over the HTTP/2 sockets above.
-  `SeclumeGrpc.header("x-api-key", spec)` covers API keys.
+  `SeclumeGrpc.header("x-api-key", spec, "api.example.com:443")` covers API keys.
+- **Bound to its server:** the token goes to the `host:port` named, and only there. The same
+  credentials used on a channel to another host send the placeholder, which that host refuses.
+  The forms without a server (deprecated) bound the token to whichever server came first.
 - **Limits:** the transport must not Huffman-code header strings; gRPC's OkHttp transport
   does not, and a block that does is refused rather than sent. The Netty transport is not
   covered: it does its own TLS.
@@ -1821,6 +1914,12 @@ source.setBaseEnvironmentProperties(ldap.socketFactory());
   registered server, it goes out as it is and the server refuses it; with
   `authentication=kerberos` it starts no Kerberos bind then. It is 144 random bits after a
   fixed prefix, not a counter one could guess.
+- **Not even as the service account itself:** a login form whose user name maps to the
+  application's own DN (`{0}@example.com` and `svc-app`) binds as that DN, and on the wire such a
+  bind looks like the application's. A registration made `serviceBindsOnly()` has its placeholder
+  replaced only in binds opened through `SeclumeLdap.asService(() -> new InitialDirContext(env))`;
+  the Spring Boot context source opens its own contexts that way, so a user's bind - Spring
+  Security's `BindAuthenticator` - goes out with the placeholder and is refused.
 - **Spring Boot:** `seclume.ldap.url=ldaps://...` or `ldap://...` makes the
   `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
   use it.
@@ -1865,6 +1964,10 @@ SecretWatch watch = SecretWatch.start("orders-db", provider, Duration.ofSeconds(
   into it.
 - **What is not a change:** a source that cannot be read for a moment (Vault restarting, a
   file mid-swap). The watch keeps what it knew and looks again at the next tick.
+- **Rotation is not revocation:** `rotateSecret` makes new logins use the new secret and closes
+  the pool's connections - idle at once, borrowed ones on return or after the grace. A
+  connection opened with the old secret works until then; ending the old credential's sessions
+  at once is the server's part (a Vault role's `revocation_statements`, see PROVIDERS.md).
 - **Each rotation** is a `space.seclume.SecretRotation` JFR event with the watch's name and
   whether taking up the new secret worked. With `seclume.metrics.queries=true` it is also the
   Micrometer counter `seclume.secret.rotations{watch, outcome}`.

@@ -44,6 +44,21 @@ concurrency:
   group: ci-${{ github.ref }}${{ inputs.run && format('-hunt-{0}', inputs.run) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !inputs.run }}
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
   # The crypto policy action as a user's pipeline runs it: the first release
   # meets a strict policy, the second - the hybrid lost, an RSA-2048 key, a
@@ -53,6 +68,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -104,6 +121,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -226,6 +245,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -238,7 +259,7 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3
           kubectl create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl create configmap probe --from-file=seclume-heapcheck/ci/Probe.java
           kubectl apply -f seclume-heapcheck/kubectl/ci/pods.yaml
@@ -252,7 +273,7 @@ jobs:
           done
           jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
           echo "SECLUME_HEAPCHECK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
-          echo "SECLUME_HEAPCHECK_IMAGE=docker.io/library/eclipse-temurin:25-jdk" >> "$GITHUB_ENV"
+          echo "SECLUME_HEAPCHECK_IMAGE=docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3" >> "$GITHUB_ENV"
       - name: The leak is found inside the pod, and only the report comes out
         run: |
           set -euo pipefail
@@ -305,6 +326,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -317,8 +340,8 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk \
-            docker.io/library/eclipse-temurin:25-jre
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3 \
+            docker.io/library/eclipse-temurin:25-jre@sha256:4ed132f6832e9804b123e89a849a7b4502756ae64a4ee08ebab939d9d5d0a9fa
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
           bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           SECLUME_IMAGE=seclume-admission:ci bash seclume-admission/deploy/install.sh
@@ -422,6 +445,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -527,8 +552,32 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - name: Test required database coverage gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: The security gate names every method of its tests that exists
+        run: python3 .github/scripts/gate_methods.py --check
+      # Images and downloads by digest or checksum; the ones not pinned yet are
+      # listed in .github/unpinned-inputs.json, and that list only shrinks.
+      - name: No new input fetched by name alone
+        run: python3 .github/scripts/pinned_inputs.py --check
+      # The gate a pull request is judged by is the base branch's; this makes a
+      # relaxation visible where it is made: named, with a reason, or red.
+      - name: The gate and the coverage floors only get stricter
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$BASE_SHA"
+          python3 .github/scripts/gate_ratchet.py --base "$BASE_SHA"
       - name: The Maven Central bundle stays under 1,000 files
         run: python3 .github/scripts/central_bundle.py
       - name: Test heapcheck report comparison
@@ -593,7 +642,7 @@ jobs:
           seclume-verify/src/test/resources/cbom/release-2.json
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group core --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --platform linux-x64
       # Line and branch coverage per module and for the security-critical
       # packages, in the job summary and as coverage.json beside the reports.
       - name: Coverage
@@ -649,6 +698,15 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -666,12 +724,12 @@ jobs:
           ls -l "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib"
       - name: The security tests
         run: |
-          tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
+          tests=$("$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --tests)
           .github/scripts/mvnw-retry.sh -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck,seclume-jpa -am test \
             -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --platform ${{ matrix.platform }}'
       # Then everything else in seclume-core on this platform, not only what
       # the gate names: the platform's own code (DPAPI, CNG and the certificate
       # store on Windows, the Keychain and Homebrew's OpenSSL on macOS) has its
@@ -729,6 +787,15 @@ jobs:
       PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -792,7 +859,7 @@ jobs:
             -Dseclume.pgtls.port=5432 -Dseclume.pg17.port=5432
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group postgresql --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group postgresql --platform ${{ matrix.platform }}'
       - name: No test skipped for want of this job's server
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py postgresql seclume-postgresql'
@@ -830,6 +897,15 @@ jobs:
       MY_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -884,7 +960,7 @@ jobs:
             -Dseclume.mysql.port=3306
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group mysql --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group mysql --platform ${{ matrix.platform }}'
       - name: No test skipped for want of this job's server
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py mysql seclume-mysql'
@@ -921,6 +997,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -951,12 +1029,13 @@ jobs:
         if: runner.os == 'Windows'
         env:
           MONGODB_VERSION: 8.0.34
+          # Pinned here, not read from the server that serves the zip: a
+          # checksum from the same host vouches for nothing that host changes.
+          MONGODB_SHA256: 6b021a0864494e4decf278b36477a29eb36072432773e4e62c2f42c302630db0
         run: |
           zip="mongodb-windows-x86_64-$MONGODB_VERSION.zip"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip" "https://fastdl.mongodb.org/windows/$zip"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip.sha256" \
-            "https://fastdl.mongodb.org/windows/$zip.sha256"
-          (cd "$RUNNER_TEMP" && sha256sum -c "$zip.sha256")
+          echo "$MONGODB_SHA256  $RUNNER_TEMP/$zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/$zip" -d "$RUNNER_TEMP/mongodb-dist"
           bin="$(ls -d "$RUNNER_TEMP"/mongodb-dist/*/bin | head -1)"
           "$bin/mongod.exe" --version | head -1
@@ -1000,6 +1079,8 @@ jobs:
         method: [arbitraryDocumentsStayWithinBounds, generatedValuesRoundTrip]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1046,6 +1127,8 @@ jobs:
           - ShamirShareFuzzTest#anyShareIsReadOrRefused
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1095,6 +1178,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1135,6 +1220,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1187,6 +1274,8 @@ jobs:
             tests: SeclumeSettingsTest,SeclumeHelidonTest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: ${{ matrix.java }}
@@ -1221,6 +1310,8 @@ jobs:
       OPENSSL_SHA256: '967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1261,6 +1352,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1290,7 +1383,7 @@ jobs:
           docker run -d --name rabbit --hostname rabbit -p 5671:5671 \
             -v "$PWD/cert.pem:/tls/cert.pem:ro" -v "$PWD/key.pem:/tls/key.pem:ro" \
             -v "$PWD/20-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro" \
-            docker.io/library/rabbitmq:4.4
+            docker.io/library/rabbitmq:4.4@sha256:aa82e78ca0dfa59f4eeb9e8086ac7b5c8e0b31a7bb978d948c6d32756802fb27
           # As the broker's own user: a CLI run as root writes the Erlang
           # cookie first, owned by root, and the broker then cannot read it.
           for i in $(seq 1 60); do
@@ -1339,6 +1432,8 @@ jobs:
       MONGO_IMAGE: docker.io/library/mongo:${{ matrix.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1374,6 +1469,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1407,6 +1504,8 @@ jobs:
       CONTAINER_ENGINE: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1450,7 +1549,7 @@ jobs:
         run: |
           rm -f .local-vault-*
           docker rm -f slm-vault slm-vault-pg || true
-          VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
+          VAULT_IMAGE=quay.io/openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
           .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \
@@ -1471,7 +1570,7 @@ jobs:
             -keyout "$RUNNER_TEMP/moto/key.pem" -out "$RUNNER_TEMP/moto/cert.pem" 2>/dev/null
           chmod 644 "$RUNNER_TEMP/moto/key.pem"
           docker run -d --name slm-moto -p 4443:4443 -v "$RUNNER_TEMP/moto:/certs:ro" \
-            motoserver/moto:5.1.22 -p 4443 -c /certs/cert.pem -k /certs/key.pem
+            motoserver/moto:5.1.22@sha256:1e3802c95726373544967b428201c548f0247c15b00db2d96a5ba0a77d8643b8 -p 4443 -c /certs/cert.pem -k /certs/key.pem
           python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443 "$RUNNER_TEMP/moto/cert.pem"
           .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
             -Dsurefire.failIfNoSpecifiedTests=false
@@ -1519,6 +1618,15 @@ jobs:
         version: ['15', '18', '19rc1']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1532,7 +1640,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pg-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '18' && '-Pcoverage' || '' }} -pl seclume-postgresql,seclume-pool,seclume-r2dbc,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
@@ -1555,7 +1665,7 @@ jobs:
       # server with TLS, which the service above is not: a second one, here.
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group postgresql --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group postgresql --platform linux-x64
       - name: No password anywhere in the process
         env:
           PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -1580,15 +1690,17 @@ jobs:
             seclume-postgresql/target/surefire-reports/*ProcessMemoryTest.txt
           # R2DBC's heap against the same server; the other three databases
           # are not in this job and skip. Case [1] is PostgreSQL, and it must
-          # have run and passed - a self-closed testcase has no <skipped/>.
+          # have run and passed - no <failure>, <error> or <skipped> in it.
           .github/scripts/mvnw-retry.sh -B -pl seclume-r2dbc -am test \
             -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap,LocalEncryptedR2dbcTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
-          grep -qE 'name="thePasswordIsNotOnTheHeap\(Db\)\[1\]"[^>]*/>' \
-            seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml
+          python3 .github/scripts/require_testcase.py \
+            'seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml' \
+            'thePasswordIsNotOnTheHeap(Db)[1]'
           # Field encryption over R2DBC, against the same server: case [1] again.
-          grep -qE 'name="valuesGoInEncryptedAndComeBackIntoNativeMemory\(Db\)\[1\]"[^>]*/>' \
-            seclume-r2dbc/target/surefire-reports/TEST-*LocalEncryptedR2dbcTest.xml
+          python3 .github/scripts/require_testcase.py \
+            'seclume-r2dbc/target/surefire-reports/TEST-*LocalEncryptedR2dbcTest.xml' \
+            'valuesGoInEncryptedAndComeBackIntoNativeMemory(Db)[1]'
       - if: always()
         run: |
           rm -f .local-pgtls-password
@@ -1657,7 +1769,7 @@ jobs:
     runs-on: ubuntu-26.04
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -1670,6 +1782,8 @@ jobs:
           --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1682,7 +1796,7 @@ jobs:
       - name: Start PgBouncer in transaction mode
         run: |
           mkdir bouncer
-          pw="${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}"
+          pw="$S_PG_TEST_PASSWORD"
           printf '"seclume_test" "%s"\n' "$pw" > bouncer/userlist.txt
           cat > bouncer/pgbouncer.ini <<'EOF'
           [databases]
@@ -1700,7 +1814,11 @@ jobs:
           chmod 777 bouncer && chmod 666 bouncer/*
           docker run -d --name bouncer --network host -v "$PWD/bouncer:/etc/pgbouncer" edoburu/pgbouncer@sha256:9c78945868a6a142c7fc40ccd843bbe5a606df163c7ffce4de70e0d628d696a2   # PgBouncer 1.26.0
           for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/6432) 2>/dev/null && break; sleep 1; done
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pgtls-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pgtls-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: >-
           .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test -Dtest=PgBouncerTest
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -1720,6 +1838,8 @@ jobs:
       PW: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1735,13 +1855,13 @@ jobs:
           docker run -d --name pgprimary --network repl -p 5432:5432 \
             -e POSTGRES_USER=seclume_test -e POSTGRES_PASSWORD="$PW" -e POSTGRES_DB=seclume_test \
             -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
-            postgres:18
+            postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
           # Over TCP: the server that initialises the data directory listens on its socket only.
           for i in $(seq 1 60); do docker exec pgprimary pg_isready -q -h 127.0.0.1 && break; sleep 1; done
           docker exec pgprimary bash -c 'echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"'
           docker exec -u postgres pgprimary pg_ctl reload
           docker run -d --name pgstandby --network repl -p 5433:5432 --user postgres \
-            -e PGPASSWORD="$PW" -e PGDATA=/tmp/standby --entrypoint bash postgres:18 \
+            -e PGPASSWORD="$PW" -e PGDATA=/tmp/standby --entrypoint bash postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328 \
             -c 'pg_basebackup -h pgprimary -U seclume_test -D "$PGDATA" -R -X stream && chmod 700 "$PGDATA" && exec postgres'
           for i in $(seq 1 60); do docker exec pgstandby pg_isready -q -h 127.0.0.1 && break; sleep 1; done
           docker exec -e PGPASSWORD="$PW" pgstandby psql -h 127.0.0.1 -U seclume_test -At \
@@ -1751,7 +1871,7 @@ jobs:
           for server in 1 2; do
             name=$([ $server = 1 ] && echo myprimary || echo myreplica)
             docker run -d --name $name --network repl -p $((3305 + server)):3306 \
-              -e MYSQL_ROOT_PASSWORD="$PW" mysql:8.4 \
+              -e MYSQL_ROOT_PASSWORD="$PW" mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00 \
               --server-id=$server --gtid-mode=ON --enforce-gtid-consistency=ON
           done
           # Over TCP, for the same reason as above.
@@ -1794,6 +1914,8 @@ jobs:
           docker rm -f pgprimary pgstandby myprimary myreplica || true
 
   mysql:
+    # The name the required checks know - the tag, not the digest
+    name: mysql (${{ matrix.server }}, ${{ matrix.health }})
     runs-on: ubuntu-26.04
     services:
       mysql:
@@ -1814,25 +1936,41 @@ jobs:
         # both paths have to work. They do not agree on what a health check is
         # called either: mysqladmin is gone from the MariaDB images.
         include:
-          - image: 'mysql:8.4'
+          - server: 'mysql:8.4'
+            image: 'mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mariadb:11.4'
+          - server: 'mariadb:11.4'
+            image: 'mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b'
             health: 'healthcheck.sh --connect --innodb_initialized'
           # The current lines: MySQL 9.7 LTS and the 26.x innovation release,
           # MariaDB 12.3 LTS and 13.0 - and 13.1's release candidate, as with
           # PostgreSQL's, so that a protocol change shows up before the release.
-          - image: 'mysql:9.7'
+          - server: 'mysql:9.7'
+            image: 'mysql:9.7@sha256:1f2ca53a9e94ff9f1f313099fa7dc7fb2f72e180ca5b2ef83574031e451bbbf1'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mysql:26.10'
+          - server: 'mysql:26.10'
+            image: 'mysql:26.10@sha256:9092489f49fb59c4ba6c1425c6a59f71f864f24bf4339a5a26b718adc7a8b343'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mariadb:12.3'
+          - server: 'mariadb:12.3'
+            image: 'mariadb:12.3@sha256:4aaf88b3106382c8c18e49f0cec60267be618fc22f858c4503afb2a2555afed3'
             health: 'healthcheck.sh --connect --innodb_initialized'
-          - image: 'mariadb:13.0'
+          - server: 'mariadb:13.0'
+            image: 'mariadb:13.0@sha256:54f493ea0d60b621a5bff84e5b20100f8b86b6efa6b79158e04756c5194a5e4d'
             health: 'healthcheck.sh --connect --innodb_initialized'
-          - image: 'mariadb:13.1-rc'
+          - server: 'mariadb:13.1-rc'
+            image: 'mariadb:13.1-rc@sha256:fa0f01b29a8a082133834957dacf0b3d2cddb0de63a9b71da26866783c208d9a'
             health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1846,7 +1984,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - run: printf '%s' "$S_MY_TEST_PASSWORD" > .local-mysql-password
+        env:
+          S_MY_TEST_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
       # What the driver's tests need of the server, set as a DBA would: functions
       # created with binary logging on (MySQL), and the right to list prepared XA
       # transactions (MySQL 8's XA_RECOVER_ADMIN). MariaDB needs neither.
@@ -1862,18 +2002,26 @@ jobs:
           # The Spring application's Flyway wants an empty schema, not the one
           # the driver tests have filled.
           mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS seclume_spring; GRANT ALL ON seclume_spring.* TO 'seclume_test'@'%'"
+          # A role for SessionResetTest to activate: the reset must not hand it
+          # to the next borrower (COM_RESET_CONNECTION keeps active roles).
+          mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE ROLE IF NOT EXISTS seclume_reset_role; GRANT SELECT ON seclume_test.* TO seclume_reset_role; GRANT seclume_reset_role TO 'seclume_test'@'%'"
       # The module's Local* tests default to port 3307, a developer's second
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
       # happens again.
-      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.image == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306
+      # MariaDB logs the test user in with mysql_native_password, which
+      # since 0.15.0 goes only to a server whose certificate was checked; the
+      # tests connect without TLS. The opt-out an operator of such a server
+      # sets, set here for MariaDB only, so that the native path stays
+      # tested - LegacyHashOverUnverifiedTlsTest checks the refusal itself.
+      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.server == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306 ${{ startsWith(matrix.server, 'mariadb') && '-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true' || '' }}
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
-        if: (success() || failure()) && matrix.image == 'mysql:8.4'
+        if: (success() || failure()) && matrix.server == 'mysql:8.4'
         run: echo "${{ github.job }}" > coverage-job.txt
       - name: Coverage data upload
-        if: (success() || failure()) && matrix.image == 'mysql:8.4'
+        if: (success() || failure()) && matrix.server == 'mysql:8.4'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-exec-mysql
@@ -1885,9 +2033,9 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 ${{ startsWith(matrix.server, 'mariadb') && '-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true' || '' }} -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
@@ -1911,7 +2059,7 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against MySQL
-        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 ${{ startsWith(matrix.server, 'mariadb') && '-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true' || '' }}
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "MySQL"
@@ -1935,6 +2083,15 @@ jobs:
         ports: ['1433:1433']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -1960,7 +2117,7 @@ jobs:
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server ${{ matrix.version }} container found"; exit 1; fi
           # seclume_spring: the Spring application's, whose Flyway wants it empty.
           sql="if db_id('seclume_test') is null create database seclume_test; if db_id('seclume_spring') is null create database seclume_spring"
-          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_MSSQL_TEST_PASSWORD"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" -Q "$sql"; then
               exit 0
@@ -1969,7 +2126,11 @@ jobs:
           done
           echo "::error title=sqlserver::SQL Server ${{ matrix.version }} never accepted a login: $(docker logs "$id" 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-2500)"
           exit 1
-      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_MSSQL_TEST_PASSWORD" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '2022' && '-Pcoverage' || '' }} -pl seclume-sqlserver -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
@@ -1989,7 +2150,7 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,JakartaDataOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
@@ -2043,8 +2204,17 @@ jobs:
             -e APP_USER_PASSWORD="$ORA_PASSWORD" \
             --health-cmd healthcheck.sh --health-interval 10s \
             --health-timeout 10s --health-retries 60 \
-            gvenzl/oracle-free:23-slim
+            gvenzl/oracle-free:23-slim@sha256:48a3d9db7fa7c2a2fdbdf5fff7502c93e807349a2d625718fe61668cc3daa844
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -2102,7 +2272,7 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group oracle --platform linux-x64
       - name: Verify framework edge cases
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,JakartaDataOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests
@@ -2148,6 +2318,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -2168,20 +2340,24 @@ jobs:
       - name: Start CockroachDB with certificates and a password
         run: |
           set -e
-          image=cockroachdb/cockroach:v26.2.11
+          image=cockroachdb/cockroach:v26.2.11@sha256:811e5001de2f003ca4539b03853d98e1fd79f70bf929393b17a645673f8d5f47
           certs="--certs-dir=/certs --ca-key=/certs/ca.key"
           docker volume create crdb-certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-ca $certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-node localhost 127.0.0.1 0.0.0.0 $certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-client root $certs
           docker run -d --name crdb -v crdb-certs:/certs -p 26257:26257 --entrypoint /cockroach/cockroach "$image" start-single-node --certs-dir=/certs --listen-addr=0.0.0.0:26257 --advertise-addr=127.0.0.1:26257 --store=/tmp/crdb
-          pw="${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_CRDB_TEST_PASSWORD"
           for i in $(seq 1 30); do
             if docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "select 1" >/dev/null 2>&1; then break; fi
             sleep 3
           done
           docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "create user seclume_test with password '$pw'; create database seclume_test; grant all on database seclume_test to seclume_test;"
-      - run: printf '%s' "${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-crdb-password
+        env:
+          S_CRDB_TEST_PASSWORD: ${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_CRDB_TEST_PASSWORD" > .local-crdb-password
+        env:
+          S_CRDB_TEST_PASSWORD: ${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Cockroach' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.crdb.host=127.0.0.1
       - if: always()
         run: rm -f .local-crdb-password; docker rm -f crdb || true
@@ -2190,6 +2366,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -2210,8 +2388,8 @@ jobs:
       - name: Start YugabyteDB with authentication
         run: |
           set -e
-          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.3.0-b100 bin/yugabyted start --daemon=false --ysql_enable_auth=true
-          pw="${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}"
+          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.3.0-b100@sha256:c1ddbf9c189f6ef33f03c648efadb1b1e82b5e7c8be472c56b1357c024221528 bin/yugabyted start --daemon=false --ysql_enable_auth=true
+          pw="$S_YB_TEST_PASSWORD"
           for i in $(seq 1 60); do
             ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')
             if [ -n "$ip" ] && docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "select 1" >/dev/null 2>&1; then
@@ -2222,7 +2400,11 @@ jobs:
           done
           echo "YugabyteDB never accepted a login" >&2
           exit 1
-      - run: printf '%s' "${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-yb-password
+        env:
+          S_YB_TEST_PASSWORD: ${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}
+      - run: printf '%s' "$S_YB_TEST_PASSWORD" > .local-yb-password
+        env:
+          S_YB_TEST_PASSWORD: ${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
       # Why, on the pull request: the server's last words and the failed tests.
       - if: failure()
@@ -2251,6 +2433,8 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: '25'
@@ -2288,9 +2472,16 @@ jobs:
       # or package it is about. Only a complete measurement is held to them -
       # with a test job failed or cancelled its share of the data is missing,
       # and that job's own failure is the one to read.
+      # On a pull request, the floors and their gate as the base branch has
+      # them - a change cannot lower a floor and drop its tests in one go.
+      - name: Coverage floors as the base branch has them
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_coverage_floors.sh
       - name: Coverage floors
         if: >-
           needs.core.result == 'success' && needs.postgresql.result == 'success'
           && needs.mysql.result == 'success' && needs.sqlserver.result == 'success'
           && needs.oracle.result == 'success'
-        run: python3 .github/scripts/coverage_gate.py coverage-merged.json .github/coverage-floors.json
+        run: python3 "$COVERAGE_GATE" coverage-merged.json "$COVERAGE_FLOORS"

@@ -116,7 +116,7 @@ final class SeclumeDataSources {
      * switches the limit off, and says so by being written down.
      */
     static String withResultLimit(String name, String url, long maxHeap) {
-        if (url.contains("maxResultBytes=") || url.contains("maxResultRows=")) {
+        if (hasOption(url, "maxResultBytes") || hasOption(url, "maxResultRows")) {
             return url;
         }
         long limit = Math.max(16L << 20, Math.min(256L << 20, maxHeap / 4));
@@ -127,6 +127,31 @@ final class SeclumeDataSources {
         String head = hash < 0 ? url : url.substring(0, hash);
         String tail = hash < 0 ? "" : url.substring(hash);
         return head + (head.contains("?") ? "&" : "?") + "maxResultBytes=" + limit + tail;
+    }
+
+    /**
+     * Whether the URL's query - not its path, not another option's value -
+     * has {@code key}, compared as the drivers compare keys. A text search
+     * found {@code maxResultRows=} in {@code applicationName=report-maxResultRows=5}
+     * and set no limit.
+     */
+    static boolean hasOption(String url, String key) {
+        int hash = url.indexOf('#');
+        String head = hash < 0 ? url : url.substring(0, hash);
+        int question = head.indexOf('?');
+        if (question < 0) {
+            return false;
+        }
+        String wanted = space.seclume.internal.JdbcUrl.normalize(key);
+        for (String pair : head.substring(question + 1).split("&")) {
+            int equals = pair.indexOf('=');
+            String name = java.net.URLDecoder.decode(equals < 0 ? pair : pair.substring(0, equals),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            if (space.seclume.internal.JdbcUrl.normalize(name).equals(wanted)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static DataSource built(String name, String url, Build build) {

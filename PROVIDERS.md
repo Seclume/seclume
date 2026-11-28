@@ -20,6 +20,23 @@ prevent. Settings say *where* a secret lives, never what it is. That is also why
 secret a provider needs — a Vault token, a bearer token, an AWS session token — is itself a
 nested provider rather than a value.
 
+## Providers that read this machine: named at start-up
+
+Whoever writes a URL also picks the host the secret goes to. A provider that reads something
+of this machine - `file`, `env-file`, `unix-socket`, `process`, `dpapi`, `credential-manager`,
+`libsecret`, `keychain`, `shamir`, `spiffe-jwt` - would have it read any file or local store it
+can and send that to the host as the password. So these are chosen from a URL or Properties
+only where the JVM names them:
+
+```
+-Dseclume.secret.providers=file,env-file
+```
+
+Nested providers are checked the same way (an `encrypted` provider whose key is a `file`).
+Providers that only reach a remote service - Vault, the cloud secret stores and KMSs, RDS IAM -
+are not affected, nor is a provider the application builds in code. `process` keeps its own
+switch as well, `-Dseclume.secret.process.allowed=true`.
+
 ## The providers
 
 | Provider | Reads from | Expires | Needs a provider underneath | Per connect |
@@ -109,6 +126,10 @@ provider=keychain         service=orders-db              account=app   # account
                           # as stored by: security add-generic-password -s orders-db -a app -w
 ```
 
+`process` runs a command, which a URL or configuration that someone else can write turns into
+running their command: it is refused unless the JVM is started with
+`-Dseclume.secret.process.allowed=true`.
+
 `libsecret` reads the item as libsecret's own `SecretValue`, which lives in libsecret's
 non-pageable memory and is wiped when released; the bytes go from there into the target. It
 matches the attributes only, so an item stored under any schema is found. Tested against
@@ -178,6 +199,28 @@ as long as Vault extends it; when the role's `max_ttl` caps the renewal, a new c
 fetched. **Closing the provider revokes the lease**, and Vault drops the user at once.
 Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`), and the
 same fixture against OpenBao.
+
+**Revoking a lease does not end the sessions already open with it - unless the role says so.**
+With Vault's default revocation the user is dropped and new logins fail, but a session that is
+already logged in carries on: PostgreSQL does not end a session when its role is dropped. A
+pool holds its sessions until the lease would have ended, so revoking a leaked credential leaves
+them working until then. Measured with `.github/scripts/vault_revocation_proof.sh` (Vault 1.20,
+PostgreSQL 17): a session running 15 s finished its work after the revocation; with the
+statement below in the role's `revocation_statements` it was ended at once. seclume cannot do
+this from the client side - it learns of a revocation at the next renewal at the earliest - so
+put it in the role:
+
+| Database | In `revocation_statements`, before dropping the user |
+|---|---|
+| PostgreSQL | `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '{{name}}';` |
+| MySQL | a procedure that `KILL`s each id in `information_schema.processlist` where `user = '{{name}}'` |
+| SQL Server | `KILL` each `session_id` in `sys.dm_exec_sessions` where `login_name = '{{name}}'` (dynamic SQL) |
+| Oracle | `ALTER SYSTEM KILL SESSION` for each `sid,serial#` in `v$session` where `username = '{{name}}'` |
+
+Only the PostgreSQL row is measured; the other three are the same idea in each database's terms.
+
+A KV secret has no lease, so nothing says when it changed: it is read again once it is
+`seclume.vault.kvMaxAgeSeconds` old (60 by default), so that a rotation reaches the pool.
 
 #### Logging in instead of a token file
 

@@ -98,7 +98,7 @@ class CloseOnCompletionTest {
         String host = System.getProperty("seclume.oracle.host", TestHosts.database());
         TypeCatalogTest.reachable(host, port, secret);
         compare(new Target("Oracle",
-                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?user=seclume_test",
+                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?tls=off&user=seclume_test",
                 "jdbc:oracle:thin:@//" + host + ":" + port + "/FREEPDB1", "seclume_test", secret,
                 "select level, 'row ' || level from dual connect by level <= 7 order by 1",
                 "select level from dual connect by level <= 20000 order by 1", 20000));

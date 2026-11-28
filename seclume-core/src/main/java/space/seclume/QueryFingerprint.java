@@ -221,7 +221,8 @@ public final class QueryFingerprint {
                 appendValue(out);
                 return after;
             }
-            int after = skipQuoted(sql, end, '\'');
+            boolean escaped = text.equalsIgnoreCase("e") && dialect == Dialect.POSTGRESQL;
+            int after = skipQuoted(sql, end, '\'', escaped ? Backslash.ESCAPE : Backslash.UNKNOWN);
             appendValue(out);
             return after;
         }
@@ -268,16 +269,56 @@ public final class QueryFingerprint {
         }
     }
 
-    /** Past a quoted run, doubling being the escape; unterminated runs to the end. */
+    /** What a backslash is inside a quoted run. */
+    private enum Backslash {
+        /** Nothing: an identifier, in every dialect here. */
+        LITERAL,
+        /** An escape for certain: PostgreSQL's {@code E'...'}. */
+        ESCAPE,
+        /**
+         * Either, depending on the dialect and a setting this cannot see -
+         * MySQL's {@code NO_BACKSLASH_ESCAPES}, PostgreSQL's
+         * {@code standard_conforming_strings}, and no escape at all in SQL
+         * Server and Oracle.
+         */
+        UNKNOWN
+    }
+
+    /** Past a string literal whose backslashes may or may not escape. */
     private static int skipQuoted(String sql, int start, char quote) {
+        return skipQuoted(sql, start, quote, Backslash.UNKNOWN);
+    }
+
+    /**
+     * Past a quoted run, doubling being the escape; unterminated runs to the end.
+     *
+     * <p>A backslash that might escape is not simply taken for one. That made
+     * the run longer where the dialect does not escape - {@code 'C:\dir\'} -
+     * and a run that is too long ends at the quote that opens the next
+     * literal, whose contents then came out as words: the masking was off by
+     * one quote for the rest of the statement. Where the two readings part -
+     * an odd run of backslashes before the quote - nothing can be told any
+     * more, and everything up to the end is masked.
+     */
+    private static int skipQuoted(String sql, int start, char quote, Backslash backslash) {
         int i = start + 1;
         while (i < sql.length()) {
             char c = sql.charAt(i);
-            if (c == '\\' && i + 1 < sql.length()) {
-                // Only some dialects honour this, and treating it as an escape
-                // everywhere can only make the masked run longer - never
-                // shorter, which is the direction that would leak.
-                i += 2;
+            if (c == '\\' && backslash != Backslash.LITERAL) {
+                int run = i;
+                while (run < sql.length() && sql.charAt(run) == '\\') {
+                    run++;
+                }
+                boolean odd = (run - i) % 2 == 1;
+                if (backslash == Backslash.ESCAPE) {
+                    // Pairs are backslashes; an odd one escapes what follows.
+                    i = odd ? Math.min(run + 1, sql.length()) : run;
+                    continue;
+                }
+                if (odd && run < sql.length() && sql.charAt(run) == quote) {
+                    return sql.length();
+                }
+                i = run;
                 continue;
             }
             if (c == quote) {
@@ -292,8 +333,14 @@ public final class QueryFingerprint {
         return sql.length();
     }
 
+    /**
+     * A quoted identifier, kept as it is. A backslash in it is an ordinary
+     * character in every dialect here: taken for an escape, {@code "col\"}
+     * ran on past its quote and copied the rest of the statement - its
+     * literals with it - into the fingerprint.
+     */
     private static int copyQuoted(String sql, int start, char quote, StringBuilder out) {
-        int end = skipQuoted(sql, start, quote);
+        int end = skipQuoted(sql, start, quote, Backslash.LITERAL);
         out.append(sql, start, end);
         return end;
     }

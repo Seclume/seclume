@@ -183,6 +183,74 @@ class ShamirSharesTest {
         }
     }
 
+    /** The line up to its CRC, with a CRC that fits again - a deliberate change, not a typo. */
+    private static String withCrc(String withoutCrc) {
+        CRC32 crc = new CRC32();
+        crc.update(withoutCrc.getBytes(StandardCharsets.US_ASCII));
+        return withoutCrc + "." + String.format("%08x", crc.getValue());
+    }
+
+    private static String withoutCrc(String line) {
+        return line.substring(0, line.lastIndexOf('.'));
+    }
+
+    /** Another format's MAGIC, its CRC made to fit: refused as not a share of this kind. */
+    @Test
+    void anotherMagicIsRefusedEvenWithAFittingCrc() {
+        String forged = withCrc(withoutCrc(GOLDEN.get(0)).replace("seclume-share-1", "seclume-share-2"));
+        try (Arena arena = Arena.ofConfined()) {
+            assertThrows(SecretUnavailableException.class, () -> parse(arena, forged));
+        }
+    }
+
+    /**
+     * A share of the same split that names another threshold, or carries a
+     * shorter value - CRC made to fit - is not combined with the others.
+     */
+    @Test
+    void sharesThatDifferInThresholdOrLengthAreNotCombined() {
+        String[] fields = withoutCrc(GOLDEN.get(2)).split("\\.");
+        // seclume-share-1 . split . k . x . y
+        String otherThreshold = withCrc(String.join(".", fields[0], fields[1], "4", fields[3],
+                fields[4]));
+        String shorter = withCrc(String.join(".", fields[0], fields[1], fields[2], fields[3],
+                fields[4].substring(0, fields[4].length() - 2)));
+        try (Arena arena = Arena.ofConfined()) {
+            for (String odd : new String[] {otherThreshold, shorter}) {
+                MemorySegment target = arena.allocate(64);
+                ShamirShares.Share third;
+                try {
+                    third = parse(arena, odd);
+                } catch (SecretUnavailableException refusedAlready) {
+                    continue;                       // refused when read: as good
+                }
+                ShamirShares.Share last = third;
+                assertThrows(SecretUnavailableException.class, () -> ShamirShares.combine(
+                        List.of(parse(arena, GOLDEN.get(0)), parse(arena, GOLDEN.get(1)), last),
+                        target), odd);
+                assertAllZero(target);
+            }
+        }
+    }
+
+    /** split's own bounds: 1 to 255 shares; 0 and 256 refused before anything is written. */
+    @Test
+    void theNumberOfSharesIsBounded() throws IOException {
+        Path secretFile = Files.write(directory.resolve("secret"), secret());
+        for (int shares : new int[] {0, 256, -1}) {
+            Path out = directory.resolve("n" + (shares & 0xffff));
+            int n = shares;
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, n, out));
+            assertTrue(refused.getMessage().contains("1 to 255"), refused.getMessage());
+            assertFalse(Files.exists(out) && Files.list(out).findAny().isPresent(),
+                    "files were written for " + shares + " shares");
+        }
+        Path most = directory.resolve("most");
+        assertEquals(255, ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, 255, most)
+                .size());
+    }
+
     @Test
     void tooFewSharesAreRefused() {
         try (Arena arena = Arena.ofConfined()) {

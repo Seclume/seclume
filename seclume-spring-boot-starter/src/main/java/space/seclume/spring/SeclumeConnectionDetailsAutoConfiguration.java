@@ -68,21 +68,28 @@ public class SeclumeConnectionDetailsAutoConfiguration {
      * vendor driver's and are dropped; what the containers need instead is
      * added - a public key over an unencrypted MySQL connection, the password
      * over its unchecked TLS, and trust in
-     * the self-signed certificate a SQL Server container makes.
+     * the self-signed certificate a SQL Server container makes. A container
+     * has no certificate a CA vouches for, so the URL says the TLS mode it can
+     * have - prefer, or off for Oracle without TCPS - instead of the default
+     * verify-full; it is a throwaway container's, and named among the weakened
+     * settings like any other.
      */
     static String translate(String url) {
         String lower = url.toLowerCase(Locale.ROOT);
         if (lower.startsWith("jdbc:postgresql:")) {
-            return "jdbc:seclume:postgresql:" + withoutQuery(url.substring("jdbc:postgresql:".length()));
+            return "jdbc:seclume:postgresql:" + withoutQuery(url.substring("jdbc:postgresql:".length()))
+                    + "?tls=prefer";
         }
         if (lower.startsWith("jdbc:mysql:") || lower.startsWith("jdbc:mariadb:")) {
             String rest = url.substring(url.indexOf(':', 5) + 1);
             // A container's self-signed certificate cannot be checked, and
             // its password came as a String already: the password itself
             // may go over its unchecked TLS, as trustServerCertificate does
-            // for SQL Server below.
+            // for SQL Server below. MariaDB's containers log in with
+            // mysql_native_password, which goes over it for the same reason.
             return "jdbc:seclume:mysql:" + withoutQuery(rest)
-                    + "?allowPublicKeyRetrieval=true&allowCleartextOverUnverifiedTls=true";
+                    + "?tls=prefer&allowPublicKeyRetrieval=true&allowCleartextOverUnverifiedTls=true"
+                    + "&allowLegacyHashOverUnverifiedTls=true";
         }
         if (lower.startsWith("jdbc:sqlserver:")) {
             String[] parts = url.substring("jdbc:sqlserver:".length()).split(";");
@@ -101,7 +108,7 @@ public class SeclumeConnectionDetailsAutoConfiguration {
             if (!address.startsWith("//")) {
                 address = "//" + address;
             }
-            return "jdbc:seclume:oracle:" + withoutQuery(address);
+            return "jdbc:seclume:oracle:" + withoutQuery(address) + "?tls=off";
         }
         if (lower.startsWith("jdbc:seclume:")) {
             return url;

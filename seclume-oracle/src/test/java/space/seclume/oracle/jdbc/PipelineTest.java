@@ -82,7 +82,7 @@ class PipelineTest {
 
     private String url(String at, int atPort) {
         return "jdbc:seclume:oracle://" + at + ":" + atPort + "/" + service
-                + "?user=" + user + "&provider=file&path="
+                + "?tls=off&user=" + user + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

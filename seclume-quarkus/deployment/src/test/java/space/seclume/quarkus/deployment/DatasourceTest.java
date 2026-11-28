@@ -55,7 +55,7 @@ class DatasourceTest {
                     + "&trustServerCertificate=true" + secret(MSSQL))
             .overrideConfigKey("quarkus.datasource.\"oracle\".db-kind", "seclume-oracle")
             .overrideConfigKey("quarkus.datasource.\"oracle\".jdbc.url",
-                    "jdbc:seclume:oracle://" + HOST + ":1521/FREEPDB1?user=seclume_test"
+                    "jdbc:seclume:oracle://" + HOST + ":1521/FREEPDB1?tls=off&user=seclume_test"
                     + secret(ORACLE));
 
     @Inject

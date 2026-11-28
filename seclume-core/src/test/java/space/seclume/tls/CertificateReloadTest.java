@@ -162,6 +162,9 @@ class CertificateReloadTest {
             // The key follows. After the pause for a refused certificate the
             // pair loads.
             Files.writeString(key, pem(newClient));
+            identity.forHandshake();
+            assertEquals(0, reloading.reloads(),
+                    "a refused certificate was tried again before its pause was over");
             Thread.sleep(ReloadingClientIdentity.retryMillis + 200);
             handshake(identity);
             assertEquals(1, reloading.reloads());

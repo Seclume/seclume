@@ -75,8 +75,26 @@ public final class SeclumeAssessment {
     public static SeclumeAssessment of(String authentication, String tls,
                                        Instant certificateExpires, PoolStatistics statistics,
                                        int maximum, long resetsRefused, Instant now) {
+        return of(authentication, tls, null, certificateExpires, statistics, maximum,
+                resetsRefused, now);
+    }
+
+    /**
+     * @param serverAuthenticated whether the server's certificate (or pinned key)
+     *        was checked - {@code null} when the driver cannot say, reported as such
+     */
+    public static SeclumeAssessment of(String authentication, String tls,
+                                       Boolean serverAuthenticated,
+                                       Instant certificateExpires, PoolStatistics statistics,
+                                       int maximum, long resetsRefused, Instant now) {
         SeclumeAssessment assessment = new SeclumeAssessment();
         assessment.transport(tls);
+        if (tls != null && !Boolean.TRUE.equals(serverAuthenticated)) {
+            assessment.add(Level.WARNING, "tls", Boolean.FALSE.equals(serverAuthenticated)
+                    ? "encrypted, but the server's certificate is not checked (tls=prefer or "
+                      + "require): a man in the middle can read the session and relay the login"
+                    : "encrypted; whether the server was authenticated is not known");
+        }
         assessment.certificate(certificateExpires, now);
         assessment.login(authentication);
         assessment.pool(statistics, maximum, resetsRefused);

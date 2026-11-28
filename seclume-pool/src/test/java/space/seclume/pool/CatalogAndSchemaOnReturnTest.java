@@ -96,4 +96,26 @@ class CatalogAndSchemaOnReturnTest {
             assertSame(first, source.handedOut().get(0));
         }
     }
+
+    /**
+     * The same for a schema, where it counts most - a schema per tenant: a
+     * connection that had none cannot be put back on none, so it goes, and
+     * the next borrower is on a fresh one, not on tenant_a's tables.
+     */
+    @Test
+    void whereNoSchemaWasChosenNoneCanBeChosenAgainAndTheConnectionGoes()
+            throws SQLException {
+        StubDataSource source = new StubDataSource();
+        try (SeclumePool pool = new SeclumePool(source, settings())) {
+            try (Connection c = pool.getConnection()) {
+                c.setSchema("tenant_a");               // the stub starts on none
+            }
+            StubDataSource.StubConnection first = source.handedOut().get(0);
+            assertTrue(first.closed.get(), "a connection on tenant_a's schema was kept");
+            try (Connection c = pool.getConnection()) {
+                assertEquals(null, c.getSchema(), "the next borrower is on tenant_a's schema");
+            }
+            assertEquals(2, source.openedCount());
+        }
+    }
 }

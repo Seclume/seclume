@@ -114,6 +114,31 @@ class HostnameMatchEdgeTest {
         assertFalse(HostnameMatch.matches(certificate(IP, "10.0.0.0.1"), "10.0.0.0.1"));
     }
 
+    /** An empty pattern matches nothing, and nothing matches an empty host - not even each other. */
+    @Test
+    void anEmptyPatternOrHostMatchesNothing() {
+        assertFalse(HostnameMatch.matchesPattern("", ""));
+        assertFalse(HostnameMatch.matchesPattern("", "db.example.com"));
+        assertFalse(HostnameMatch.matchesPattern("db.example.com", ""));
+        assertFalse(HostnameMatch.matchesPattern("*.example.com", ""));
+    }
+
+    /**
+     * Three dots and digits were taken for an address even with a label
+     * empty: "1.2.3." is four labels of which the last is empty - a name.
+     * As a name it is compared with the DNS entries, and with no iPAddress.
+     */
+    @Test
+    void aTrailingEmptyLabelIsNoIpv4Address() {
+        for (String name : List.of("1.2.3.", ".1.2.3", "1..2.3", "1.2.3..")) {
+            assertTrue(HostnameMatch.matches(certificate(DNS, name), name),
+                    name + " was taken for an address, and a name entry never matched it");
+        }
+        assertTrue(HostnameMatch.matches(certificate(IP, "1.2.3.4"), "1.2.3.4"),
+                "four labels are still an address");
+        assertFalse(HostnameMatch.matches(certificate(DNS, "1.2.3.4"), "1.2.3.4"));
+    }
+
     /** An IPv4-mapped IPv6 address is that IPv4 address, on either side. */
     @Test
     void anIpv4MappedAddressIsComparedAsTheAddressItIs() {

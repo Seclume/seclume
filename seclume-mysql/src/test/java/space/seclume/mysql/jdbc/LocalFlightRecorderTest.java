@@ -70,7 +70,7 @@ class LocalFlightRecorderTest {
             Assumptions.abort("no MySQL on " + HOST + ":" + PORT);
         }
         url = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test"
-                + "?user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
+                + "?tls=prefer&user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

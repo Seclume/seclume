@@ -161,6 +161,33 @@ class MutualTlsTest {
         }
     }
 
+    /**
+     * (T19) A TLS 1.2 server whose CertificateRequest names only RSA schemes,
+     * and a client whose key is P-256: the client says which schemes were
+     * asked for and which its key signs with, instead of signing anyway and
+     * meeting the server's bare handshake_failure.
+     */
+    @Test
+    void aTls12RequestWithoutTheKeysSchemeIsNamed(@TempDir Path dir) throws Exception {
+        try (ClientIdentity identity = identity(dir);
+                EchoServer server = EchoServer.start(serverContext, socket -> {
+                    socket.setNeedClientAuth(true);
+                    socket.setEnabledProtocols(new String[] {"TLSv1.2"});
+                    javax.net.ssl.SSLParameters parameters = socket.getSSLParameters();
+                    parameters.setSignatureSchemes(new String[] {"rsa_pss_rsae_sha256",
+                        "rsa_pkcs1_sha256"});
+                    socket.setSSLParameters(parameters);
+                });
+                Transport socket = connectTo(server)) {
+            IOException refused = org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+                    () -> ClientHandshake.connect(socket, HOSTNAME,
+                            CertificateTrust.of(trustStore), identity).close());
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    String.valueOf(refused.getMessage()).contains("this client's key signs with 0x403"),
+                    refused.getMessage());
+        }
+    }
+
     /** A server that does not ask never sees the identity, and nothing breaks. */
     @Test
     void anIdentityIsNotForcedOnAServerThatDoesNotAsk(@TempDir Path dir) throws Exception {

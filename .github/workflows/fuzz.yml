@@ -21,12 +21,29 @@ on:
 permissions:
   contents: read
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  # --strict-checksums checks a download against the repository's own checksum;
+  # the trusted checksums check it against .mvn/checksums, recorded once - a
+  # repository or cache that serves other bytes for a pinned version fails the
+  # build. New artifacts are not refused yet (failIfMissing): record them with
+  # .github/scripts/record-checksums.sh.
+  MAVEN_ARGS: >-
+    --strict-checksums
+    -Daether.artifactResolver.postProcessor.trustedChecksums=true
+    -Daether.artifactResolver.postProcessor.trustedChecksums.checksumAlgorithms=SHA-256
+    -Daether.trustedChecksumsSource.summaryFile=true
+    -Daether.trustedChecksumsSource.summaryFile.basedir=${{ github.workspace }}/.mvn/checksums
+
 jobs:
   corpus:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -92,9 +109,13 @@ jobs:
         target:
           - { module: seclume-postgresql, test: PgDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-mysql, test: MyDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-mysql, test: MyGetterFuzzTest, method: coverageGuided }
           - { module: seclume-sqlserver, test: TdsDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-oracle, test: OracleDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-oracle, test: OracleJsonFuzzTest, method: anyColumnValueIsReadOrRefused }
+          - { module: seclume-oracle, test: OraGetterFuzzTest, method: coverageGuided }
           - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileServerHelloFailsWithAnIoException }
+          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileTls12FlightFailsWithAnIoException }
           - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileEncryptedFlightNeverConnectsUnauthenticated }
           - { module: seclume-core, test: TlsRecordFuzzTest, method: recordsAfterTheHandshake }
           - { module: seclume-core, test: TlsRecordFuzzTest, method: aFrozenConnection }
@@ -108,6 +129,8 @@ jobs:
           - { module: seclume-core, test: ShamirShareFuzzTest, method: anyShareIsReadOrRefused }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin

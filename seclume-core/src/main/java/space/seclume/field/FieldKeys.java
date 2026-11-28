@@ -147,16 +147,45 @@ public final class FieldKeys implements AutoCloseable {
      *             {@code table.column}; it binds every value to the column, so
      *             it must not change while values exist
      */
-    public synchronized EncryptedColumn column(String name, EncryptedColumn.Mode mode) {
+    public EncryptedColumn column(String name, EncryptedColumn.Mode mode) {
+        return column(name, mode, EncryptedColumn.Context.OPTIONAL);
+    }
+
+    /**
+     * The column of this name and mode, its values bound to a context or not.
+     * A column with {@link EncryptedColumn.Context#REQUIRED} refuses a value
+     * written or read without one; the keys are the same as without it.
+     */
+    public EncryptedColumn column(String name, EncryptedColumn.Mode mode,
+                                  EncryptedColumn.Context context) {
+        return column(name, mode, context, EncryptedColumn.Padding.NONE);
+    }
+
+    /**
+     * The column of this name and mode, with its context rule and its
+     * {@link EncryptedColumn.Padding}. Padding changes what is written, not
+     * the keys: the same column with and without it reads each other's values.
+     */
+    public synchronized EncryptedColumn column(String name, EncryptedColumn.Mode mode,
+                                               EncryptedColumn.Context context,
+                                               EncryptedColumn.Padding padding) {
         checkOpen();
+        if (context == null) {
+            throw new IllegalArgumentException("a column needs a context rule");
+        }
+        if (padding == null) {
+            throw new IllegalArgumentException("a column needs a padding; Padding.NONE for none");
+        }
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("a column needs a name: it is part of its key");
         }
         if (mode == null) {
             throw new IllegalArgumentException("a column needs a mode");
         }
-        return columns.computeIfAbsent(mode.name() + '\u0000' + name,
-                ignored -> new EncryptedColumn(this, name, mode, derive(name, mode)));
+        return columns.computeIfAbsent(mode.name() + '\u0000' + context.name() + '\u0000'
+                        + padding.code() + '\u0000' + name,
+                ignored -> new EncryptedColumn(this, name, mode, context, padding,
+                        derive(name, mode)));
     }
 
     /**
@@ -272,10 +301,25 @@ public final class FieldKeys implements AutoCloseable {
         }
     }
 
+    /**
+     * After a failed reload, how long every use fails at once with that
+     * failure instead of asking the provider again: one Vault or KMS request
+     * per database value, right after a restore when the network is not up
+     * yet, was a load amplifier and a bill.
+     */
+    static final long RELOAD_BACKOFF_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+
+    private long reloadFailedAt;
+    private RuntimeException reloadFailure;
+
     /** Reads the keys again and derives every column's and index's anew. */
     private synchronized void reload() {
         if (!forgotten || closed) {
             return;
+        }
+        if (reloadFailure != null && System.nanoTime() - reloadFailedAt < RELOAD_BACKOFF_NANOS) { // mutation-equivalent: the boundary is one nanosecond wide
+            throw new IllegalStateException("the field keys could not be read again a moment "
+                    + "ago - not asked again yet", reloadFailure);
         }
         use.writeLock().lock();
         try {
@@ -286,8 +330,11 @@ public final class FieldKeys implements AutoCloseable {
                 }
             } catch (RuntimeException e) {
                 read.values().forEach(SecretScope::close);
+                reloadFailure = e;
+                reloadFailedAt = System.nanoTime();
                 throw e;
             }
+            reloadFailure = null;
             keys = Collections.unmodifiableSortedMap(read);
             try {
                 for (EncryptedColumn column : columns.values()) {
@@ -489,6 +536,7 @@ public final class FieldKeys implements AutoCloseable {
                                     + "32-byte key (44 characters)");
                         }
                         MemorySegment.copy(given.secret(), 0, key.segment(), 0, KEY_LENGTH);
+                        refuseTrivial(id, key);
                         key.length(KEY_LENGTH);
                         return key;
                     }
@@ -504,12 +552,39 @@ public final class FieldKeys implements AutoCloseable {
                         throw new IllegalArgumentException("key " + id + " is " + decoded
                                 + " bytes; field encryption takes 32 (AES-256)");
                     }
+                    refuseTrivial(id, key);
                     key.length(KEY_LENGTH);
                     return key;
                 } catch (RuntimeException e) {
                     key.close();
                     throw e;
                 }
+            }
+        }
+
+        /**
+         * A key of 32 zero bytes - a file from /dev/zero, an empty vault
+         * field, AAAA...= - is no key: everything under it is readable by
+         * anybody who tries the obvious.
+         */
+        private static void refuseTrivial(int id, SecretScope key) {
+            int any = 0;
+            int differ = 0;
+            byte first = key.segment().get(ValueLayout.JAVA_BYTE, 0);
+            for (int i = 0; i < KEY_LENGTH; i++) {
+                byte b = key.segment().get(ValueLayout.JAVA_BYTE, i);
+                any |= b;
+                differ |= b ^ first;
+            }
+            if (any == 0) {
+                throw new IllegalArgumentException("key " + id + " is 32 zero bytes - a file "
+                        + "of zeros or an empty field, not a key");
+            }
+            if (differ == 0) {
+                // One byte 32 times: a placeholder filled in, a test value -
+                // a key with eight bits of choice, not 256.
+                throw new IllegalArgumentException("key " + id + " is one byte repeated 32 "
+                        + "times - a placeholder or a test value, not a key");
             }
         }
 

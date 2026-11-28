@@ -52,6 +52,22 @@ class ChannelBindingTest {
         assertThrows(IllegalArgumentException.class, () -> ChannelBinding.hashFor(null));
     }
 
+    /**
+     * EdDSA certificates have no tls-server-end-point hash: RFC 5929 names
+     * none, OpenSSL reports none, and PostgreSQL fails its side of the login.
+     * No guess and no silent binding-less login - a refusal that says why.
+     */
+    @Test
+    void anEdDsaCertificateIsRefusedWithTheReason() {
+        for (String name : new String[] {"Ed25519", "Ed448", "EdDSA"}) {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> ChannelBinding.hashFor(name), name);
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    refused.getMessage().contains("RFC 5929")
+                    && refused.getMessage().contains("RSA or ECDSA"), refused.getMessage());
+        }
+    }
+
     /** The buffer size callers rely on has to hold the longest answer. */
     @Test
     void theStatedMaximumHolds() {

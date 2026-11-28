@@ -132,6 +132,14 @@ public final class TokenStream {
     private boolean transactionChanged;
     private SQLException failure;
 
+    /** The values the statement bound with setSensitive - see SensitiveEcho. */
+    private java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive = java.util.List.of();
+
+    /** Masks these values in the server's messages before they are decoded. */
+    void sensitive(java.util.List<space.seclume.internal.jdbc.NativeValue> values) {
+        sensitive = values;
+    }
+
     /** The stream is built empty and then walked once. */
     public TokenStream() {
     }
@@ -341,7 +349,12 @@ public final class TokenStream {
         p++;
         int messageChars = ushort(in, p);
         p += 2;
-        String message = utf16(in, p, messageChars);
+        if (!sensitive.isEmpty()) {
+            // "The duplicate key value is (...)": masked before it is a String.
+            space.seclume.internal.jdbc.SensitiveEcho.maskWide(in.segment(), p,
+                    p + 2L * messageChars, sensitive);
+        }
+        String message = space.seclume.internal.ServerText.printable(utf16(in, p, messageChars));
         if (isError) {
             SQLException next = new SQLException(
                     message + " (error " + number + ", severity " + severity + ")",

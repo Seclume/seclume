@@ -358,6 +358,15 @@ final class PooledConnection implements Connection {
                 throw new SQLException("the session cannot be fully reset - "
                         + "the connection is closed rather than lent again");
             }
+        } else if (is(USED) && pool.settings().getResetSql() != null) {
+            // A driver without a reset of its own: the configured SQL, or the
+            // last borrower's role and settings go to the next one.
+            try (java.sql.Statement reset = delegate.createStatement()) {
+                reset.execute(pool.settings().getResetSql());
+            }
+            if (!delegate.getAutoCommit()) {
+                delegate.commit();
+            }
         }
     }
 
@@ -490,6 +499,15 @@ final class PooledConnection implements Connection {
         if (session != null && session.sessionStateChanged()) {
             return false;
         }
+        // The driver's "no" is a guess from the SQL text: select
+        // app.enter_tenant(42) or a DO block sets a role or a tenant it never
+        // sees, and the renewed connection ran the borrower's next statement
+        // as the login role. Once a statement was handed out, closed or not,
+        // the session may hold what the borrower relies on - only a borrow
+        // that has run nothing yet is renewed.
+        if (handedOut != null && !handedOut.isEmpty()) {
+            return false;
+        }
         if (handedOut != null) {
             for (Statement statement : handedOut) {
                 try {
@@ -539,8 +557,38 @@ final class PooledConnection implements Connection {
      * statement - one of them would be forgotten, and forgetting one here means
      * rebuilding under an open statement.
      */
+    @SuppressWarnings("unchecked") // each handle implements what it wraps
     private <T> T record(T result) {
         if (result instanceof Statement statement) {
+            recordStatement(statement);
+            return (T) handed(statement);
+        }
+        if (result instanceof Savepoint) {
+            set(SAVEPOINT_STANDING, true);
+        }
+        return result;
+    }
+
+    /**
+     * The statement as the borrower gets it: its getConnection() is this
+     * handle, not the driver's connection - closed there it closed under the
+     * pool, and kept it outlived the borrow as the next borrower's session.
+     */
+    private Statement handed(Statement statement) {
+        if (statement instanceof CachedPreparedStatement cached) {
+            return cached;                               // a handle already
+        }
+        if (statement instanceof java.sql.CallableStatement call) {
+            return new HandedCallableStatement(call, this);
+        }
+        if (statement instanceof PreparedStatement prepared) {
+            return new HandedPreparedStatement(prepared, this);
+        }
+        return new HandedStatement(statement, this);
+    }
+
+    private void recordStatement(Statement statement) {
+        {
             if (!is(AUTO_COMMIT_ON)) {
                 // Inside a transaction a statement is work, whether or not it
                 // is still open by the time anything breaks.
@@ -554,10 +602,7 @@ final class PooledConnection implements Connection {
             } else {
                 handedOut.add(statement);
             }
-        } else if (result instanceof Savepoint) {
-            set(SAVEPOINT_STANDING, true);
         }
-        return result;
     }
 
     private void run(SqlAction action) throws SQLException {

@@ -33,8 +33,6 @@ import org.junit.jupiter.api.Test;
  */
 class ForbiddenApiTest {
 
-    private static final String ALLOW_MARKER = "seclume-allow:";
-
     private static final Map<String, String> FORBIDDEN = Map.ofEntries(
             Map.entry("new String(", "a String keeps the secret on the heap forever"),
             Map.entry(".getBytes(", "String.getBytes copies the secret into a heap array"),
@@ -54,7 +52,21 @@ class ForbiddenApiTest {
             Map.entry("java.util.Base64", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("Base64.get", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("ByteBuffer.allocate(", "a heap buffer defeats the direct read path"),
-            Map.entry("char[]", "a char array is heap and shows up in a heap dump"));
+            Map.entry("char[]", "a char array is heap and shows up in a heap dump"),
+            // Not a heap path - a clock one: deadlines and timeouts run on
+            // System.nanoTime (space.seclume.internal.Deadlines). The wall
+            // clock jumps with NTP and with a restored checkpoint.
+            Map.entry("System.currentTimeMillis()", "the wall clock jumps - measure time with "
+                    + "System.nanoTime, deadlines with space.seclume.internal.Deadlines"),
+            // Not a heap path - the JDK's Base64 decoders run an intrinsic that
+            // CVE-2026-114938 makes exploitable on unpatched JVMs, and what is
+            // decoded is often the attacker's (a token, a server's answer).
+            Map.entry("Base64.getDecoder()", "decode with space.seclume.internal.Base64Text "
+                    + "(or Base64Off into native memory), not the JDK's intrinsic"),
+            Map.entry("Base64.getUrlDecoder()", "decode with space.seclume.internal.Base64Text"
+                    + ".decodeUrl, not the JDK's intrinsic"),
+            Map.entry("Base64.getMimeDecoder()", "decode with space.seclume.internal.Base64Text, "
+                    + "not the JDK's intrinsic"));
 
     /**
      * Every module, not only this one.
@@ -84,6 +96,20 @@ class ForbiddenApiTest {
                 "forbidden constructs in production code:\n" + String.join("\n", findings));
     }
 
+    /** The nested modules are among them, the examples and the test application are not. */
+    @Test
+    void nestedModulesAreScannedToo() throws IOException {
+        List<String> found = productionSources().stream()
+                .map(p -> p.toString().replace('\\', '/')).toList();
+        for (String nested : List.of("seclume-quarkus/runtime/src/main/java",
+                "seclume-quarkus/deployment/src/main/java", "seclume-core/src/main/java")) {
+            assertTrue(found.stream().anyMatch(p -> p.endsWith(nested)), nested + " not in "
+                    + found);
+        }
+        assertTrue(found.stream().noneMatch(p -> p.contains("/examples/")
+                || p.contains("native-it")), found.toString());
+    }
+
     /**
      * The {@code src/main/java} of every module of the build.
      *
@@ -97,11 +123,23 @@ class ForbiddenApiTest {
             root = root.getParent();
         }
         Assumptions.assumeTrue(root != null, "cannot find the root of the build");
+        // Every module at any depth: seclume-quarkus/runtime and /deployment
+        // are production code one level down, and a list of the top level
+        // alone never checked them. Not the examples, which are documentation,
+        // nor a test application, nor anything a build put into target.
+        Path top = root;
         List<Path> sources = new ArrayList<>();
-        try (Stream<Path> modules = Files.list(root)) {
-            for (Path module : modules.sorted().toList()) {
-                Path java = module.resolve("src").resolve("main").resolve("java");
-                if (Files.isDirectory(java)) {
+        try (Stream<Path> tree = Files.walk(root, 4)) {
+            for (Path dir : tree.filter(Files::isDirectory).sorted().toList()) {
+                Path relative = top.relativize(dir);
+                String first = relative.getNameCount() == 0 ? "" : relative.getName(0).toString();
+                if (first.startsWith(".") || first.equals("examples") || first.equals("node_modules")
+                        || relative.toString().replace('\\', '/').contains("/target")
+                        || relative.toString().replace('\\', '/').contains("native-it")) {
+                    continue;
+                }
+                Path java = dir.resolve("src").resolve("main").resolve("java");
+                if (Files.isRegularFile(dir.resolve("pom.xml")) && Files.isDirectory(java)) {
                     sources.add(java);
                 }
             }
@@ -109,82 +147,61 @@ class ForbiddenApiTest {
         return sources;
     }
 
-    private static void check(Path file, List<String> findings) throws IOException {
-        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-        boolean inBlockComment = false;
-        for (int i = 0; i < lines.size(); i++) {
-            String raw = lines.get(i);
-            String code = strip(raw, inBlockComment);
-            inBlockComment = blockCommentContinues(raw, inBlockComment);
-            // The reason may stand on the line itself or above it - a long
-            // line would otherwise become unreadable.
-            boolean allowed = raw.contains(ALLOW_MARKER)
-                    || (i > 0 && lines.get(i - 1).contains(ALLOW_MARKER));
-            if (allowed) {
-                continue;
+    /**
+     * Shapes a substring cannot catch: a charset's {@code decode} - a String
+     * out of whatever bytes it is given - a {@code Scanner}, and a heap copy
+     * of an array handed to a buffer.
+     */
+    private static final Map<java.util.regex.Pattern, String> FORBIDDEN_SHAPES = Map.of(
+            java.util.regex.Pattern.compile(
+                    "(?:Charset|charset|UTF_8|US_ASCII|ISO_8859_1|UTF_16(?:BE|LE)?)\\.decode\\("),
+            "a charset's decode makes a String of the bytes",
+            java.util.regex.Pattern.compile("new (?:java\\.util\\.)?Scanner\\("),
+            "a Scanner reads into Strings",
+            java.util.regex.Pattern.compile("\\.wrap\\([^;]*?\\.clone\\(\\)\\)"),
+            "a cloned array is one more heap copy, out of reach of the wipe",
+            // nanoTime as a whole operand of < or >; "deadline - System.nanoTime() > 0"
+            // is the right form and is left alone.
+            java.util.regex.Pattern.compile("(?<![-+] ?)System\\.nanoTime\\(\\) ?[<>]"
+                    + "|[<>]=? ?System\\.nanoTime\\(\\)(?! ?[-+])"),
+            "nanoTime readings are compared by their difference (deadline - now > 0): the "
+                    + "clock's origin is arbitrary and a sum past the range wraps - see Deadlines");
+
+    static void check(Path file, List<String> findings) throws IOException {
+        check(file.toString(), Files.readString(file, StandardCharsets.UTF_8), findings);
+    }
+
+    /**
+     * The rules against {@code source} as code: comments and literals out,
+     * white space folded, {@code java.lang.} dropped - see {@link SourceScan}.
+     * Read line by line, {@code new  String(}, {@code new java.lang.String(},
+     * a line break before the parenthesis and an allow marker in a literal
+     * all went by.
+     */
+    static void check(String name, String source, List<String> findings) {
+        SourceScan scan = SourceScan.of(source);
+        java.util.Set<Integer> reported = new java.util.TreeSet<>();
+        for (Map.Entry<String, String> rule : FORBIDDEN.entrySet()) {
+            for (int at = scan.code.indexOf(rule.getKey()); at >= 0;
+                    at = scan.code.indexOf(rule.getKey(), at + 1)) {
+                report(scan, name, at, rule.getKey(), rule.getValue(), findings, reported);
             }
-            for (Map.Entry<String, String> rule : FORBIDDEN.entrySet()) {
-                if (code.contains(rule.getKey())) {
-                    findings.add(file + ":" + (i + 1) + " uses " + rule.getKey()
-                            + " - " + rule.getValue());
-                }
+        }
+        for (Map.Entry<java.util.regex.Pattern, String> rule : FORBIDDEN_SHAPES.entrySet()) {
+            java.util.regex.Matcher m = rule.getKey().matcher(scan.code);
+            while (m.find()) {
+                report(scan, name, m.start(), m.group(), rule.getValue(), findings, reported);
             }
         }
     }
 
-    /** Strips comments and string literals; only real code remains. */
-    private static String strip(String line, boolean inBlockComment) {
-        StringBuilder out = new StringBuilder(line.length());
-        boolean comment = inBlockComment;
-        boolean inString = false;
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            char next = i + 1 < line.length() ? line.charAt(i + 1) : '\0';
-            if (comment) {
-                if (c == '*' && next == '/') {
-                    comment = false;
-                    i++;
-                }
-                continue;
-            }
-            if (inString) {
-                if (c == '\\') {
-                    i++;
-                } else if (c == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (c == '/' && next == '*') {
-                comment = true;
-                i++;
-                continue;
-            }
-            if (c == '/' && next == '/') {
-                break;
-            }
-            if (c == '"') {
-                inString = true;
-                continue;
-            }
-            out.append(c);
+    private static void report(SourceScan scan, String name, int at, String what, String why,
+            List<String> findings, java.util.Set<Integer> reported) {
+        int line = scan.line(at);
+        if (scan.allowed(line)) {
+            return;
         }
-        return out.toString();
-    }
-
-    private static boolean blockCommentContinues(String line, boolean inBlockComment) {
-        boolean comment = inBlockComment;
-        for (int i = 0; i < line.length() - 1; i++) {
-            if (!comment && line.charAt(i) == '/' && line.charAt(i + 1) == '*') {
-                comment = true;
-                i++;
-            } else if (comment && line.charAt(i) == '*' && line.charAt(i + 1) == '/') {
-                comment = false;
-                i++;
-            } else if (!comment && line.charAt(i) == '/' && line.charAt(i + 1) == '/') {
-                break;
-            }
-        }
-        return comment;
+        findings.add(name + ":" + line + " uses " + what + " - " + why);
+        reported.add(line);
     }
 }

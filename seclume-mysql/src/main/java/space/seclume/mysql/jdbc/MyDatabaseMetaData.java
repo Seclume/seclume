@@ -104,17 +104,25 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                  else 1111
             end""";
 
-    /** A literal for a query - quotes and backslash escaped. */
-    private static String literal(String value) {
-        return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'";
+    /**
+     * A name or pattern as a literal - a backslash doubled only where the
+     * session reads it as an escape: under {@code NO_BACKSLASH_ESCAPES} a
+     * doubled one was two backslashes, and a name with one was not found.
+     */
+    private String literal(String value) throws SQLException {
+        return MyQuoting.literal(value, connection.session().noBackslashEscapes());
     }
 
     /** A pattern such as {@code %} or {@code null} as a LIKE condition. */
-    private static String like(String column, String pattern) {
+    private String like(String column, String pattern) throws SQLException {
         if (pattern == null || "%".equals(pattern)) {
             return "true";
         }
-        return column + " like " + literal(pattern);
+        // A JDBC pattern escapes with a backslash (getSearchStringEscape).
+        // Under NO_BACKSLASH_ESCAPES MySQL's LIKE has no escape character at
+        // all unless it is named - and the literal holds the backslash as it is.
+        return column + " like " + literal(pattern)
+                + (connection.session().noBackslashEscapes() ? " escape '\\'" : "");
     }
 
     /**
@@ -122,12 +130,13 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
      * JDBC callers pass sometimes the one, sometimes the other - both mean the
      * same thing here.
      */
-    private static String database(String catalog, String schemaPattern) {
+    private String database(String catalog, String schemaPattern) throws SQLException {
         return schema("table_schema", catalog, schemaPattern);
     }
 
     /** The same, for a view whose schema column is not called {@code table_schema}. */
-    private static String schema(String column, String catalog, String schemaPattern) {
+    private String schema(String column, String catalog, String schemaPattern)
+            throws SQLException {
         String name = catalog != null && !catalog.isEmpty() ? catalog : schemaPattern;
         if (name == null || name.isEmpty() || "%".equals(name)) {
             return column + " = database()";

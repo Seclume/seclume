@@ -14,10 +14,19 @@ listed test one status:
 | Status | Meaning | Lets the build through |
 |---|---|---|
 | PASS | ran, nothing skipped, nothing failed | yes |
-| FAIL | a case failed, or the test did not run at all | **no** |
+| FAIL | a case failed, a method the manifest lists did not pass, or the test did not run at all | **no** |
 | SKIPPED | every case was skipped | **no** |
 | INCONCLUSIVE | some cases ran, some were skipped | **no** |
 | NOT APPLICABLE | the test is not for this platform | yes, and says so |
+
+Each entry lists the test methods that carry the claim (`methods`, written from the test sources
+by [`gate_methods.py`](.github/scripts/gate_methods.py), which the `core` job also runs with
+`--check`). Every one of them has to pass: one passing case of the class is not enough. On a pull
+request the gate runs with the manifest and the gate script of the base branch
+([`trusted_gate.sh`](.github/scripts/trusted_gate.sh)), so a change that weakens a test cannot
+relax the gate in the same commit. A test or a method leaves the gate by a change to the manifest
+alone, merged before the change that deletes it. The workflow file is part of a pull request as
+well; this holds where changes under `.github/` need a code owner's review.
 
 A skipped security test is never counted as a passed one. Where a test may skip cases on one
 platform for a stated reason, the manifest names the platform and the reason, and the job
@@ -44,7 +53,7 @@ PASS into anything else fails before it can merge.
 |---|---|---|---|---|---|---|
 | No exception message carries a secret | A2 logs | `ErrorMessageTest` | every thrown message in production code parsed; concatenations of secret-named variables refused | PASS | static; a message built elsewhere and passed in is not seen | all |
 | A failed login's exception and log hold no secret | A2 | `LoginFailureWipeTest`, and the driver and provider tests that search a refused login's messages for the canary | the canary in a refused login; message, cause chain and captured log records searched | PASS | loggers the application adds are its own | linux-x64 |
-| The application's secrets are masked in its log lines | A2 | `SecretMaskerTest`, `LogbackRedactionTest`, `LogRedactionTest` | a real Logback configuration; the file written is searched; the masker's heap is dumped and searched for the secret | PASS | only output that goes through the converters; a secret split across log calls is not one match | all |
+| The application's secrets are masked in its log lines | A2 | `SecretMaskerTest`, `LogbackRedactionTest`, `LogbackCoverageTest`, `LogRedactionTest` | a real Logback configuration, every message and stack trace word and Spring Boot's patterns, `RedactingEncoder` around a pattern and a JSON encoder; the file written is searched; the masker's heap is dumped and searched for the secret | PASS | only output that goes through the converters; a secret split across log calls is not one match | all |
 | Debugging | A5 | - | **not tested.** A debugger attached to the JVM (JDWP) or the process (`ptrace`) can read native memory too | - | out of scope ([THREAT-MODEL.md](THREAT-MODEL.md#out-of-scope)) | - |
 
 ## TLS

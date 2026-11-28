@@ -66,7 +66,7 @@ class LocalQueryTimeoutTest {
         }
         url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/"
                 + System.getProperty("seclume.oracle.service", "FREEPDB1")
-                + "?user=" + USER + "&provider=file&path="
+                + "?tls=off&user=" + USER + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

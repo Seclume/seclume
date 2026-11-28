@@ -332,6 +332,18 @@ public final class Observed {
         event.commit();
     }
 
+    /** A placeholder nobody here handed out, refused - see SeclumeEvents.PlaceholderRefused. */
+    public static void placeholderRefused(String kind, String target, long refused) {
+        SeclumeEvents.PlaceholderRefused event = new SeclumeEvents.PlaceholderRefused();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.kind = kind;
+        event.target = target == null ? "" : target;
+        event.refused = refused;
+        event.commit();
+    }
+
     public static SeclumeEvents.Signature beginSignature() {
         SeclumeEvents.Signature event = new SeclumeEvents.Signature();
         if (!event.isEnabled()) {

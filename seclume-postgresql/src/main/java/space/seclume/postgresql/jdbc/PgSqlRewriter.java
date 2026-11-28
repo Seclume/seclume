@@ -39,6 +39,15 @@ final class PgSqlRewriter {
         int length = sql.length();
         while (i < length) {
             char c = sql.charAt(i);
+            if ((c == 'E' || c == 'e') && i + 1 < length && sql.charAt(i + 1) == '\''
+                    && (i == 0 || !identifierPart(sql.charAt(i - 1)))) {
+                // E'...': here a backslash escapes - E'it\'s ?' is one literal,
+                // and its ? is text. Read as a plain literal, it ended at the
+                // escaped quote and the ? after it became a parameter.
+                out.append(c);
+                i = copyEscaped(sql, i + 1, out);
+                continue;
+            }
             switch (c) {
                 case '\'' -> i = copyQuoted(sql, i, '\'', out);
                 case '"' -> i = copyQuoted(sql, i, '"', out);
@@ -114,6 +123,35 @@ final class PgSqlRewriter {
         }
         throw new SQLException("unterminated " + (quote == '\'' ? "string literal" : "identifier")
                 + " in: " + shape(sql));
+    }
+
+    /** An escape string's body from its opening quote: a backslash takes the next character with it. */
+    private static int copyEscaped(String sql, int start, StringBuilder out) throws SQLException {
+        out.append('\'');
+        int i = start + 1;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (c == '\\' && i + 1 < sql.length()) {
+                out.append(c).append(sql.charAt(i + 1));
+                i += 2;
+                continue;
+            }
+            out.append(c);
+            if (c == '\'') {
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+                    out.append('\'');
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        throw new SQLException("unterminated escape string in: " + shape(sql));
+    }
+
+    private static boolean identifierPart(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
     }
 
     private static int copyLineComment(String sql, int start, StringBuilder out) {

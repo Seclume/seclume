@@ -162,6 +162,14 @@ try (Connection c = DriverManager.getConnection(url)) {
 }
 ```
 
+The server's certificate and name are checked - `verify-full` is the default; give a private
+CA with `tlsRootCert=/etc/ssl/db-ca.pem`, and relax it only on purpose, `tls=require` say
+([TLS.md](TLS.md)).
+
+A URL may name a file, or anything else of this machine, only where the JVM is started to
+allow it - `-Dseclume.secret.providers=file` here: whoever writes a URL also picks the host the
+secret goes to ([PROVIDERS.md](PROVIDERS.md)).
+
 The URL prefix is `jdbc:seclume:`. There is one artifact per database: `seclume-postgresql`,
 `seclume-mysql`, `seclume-sqlserver` and `seclume-oracle`. There are also `seclume-pool` and
 `seclume-spring-boot-starter`, and the starter pulls in what it needs. The groupId and the
@@ -254,7 +262,7 @@ Everything below works on all four databases unless the row says otherwise.
 | | `seclume-verify --migrate`: your Hikari/pgjdbc/mssql-jdbc configuration translated, unsafe settings named | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
 | | `NoSecretInHeap`: the heap-dump proof in your own tests; `seclume-heapcheck` for any process |
 | | `seclume-heapcheck --redact`: a copy of a heap dump with every credential it finds overwritten, to hand on; the library behind it is `seclume-heapdump` | [DIAGNOSTICS.md](DIAGNOSTICS.md#a-dump-to-hand-on---redact) |
-| | Log lines with the application's own secrets masked before they are written - a Logback converter for message and stack trace, the masker holding keyed fingerprints, never a secret: `seclume-logging` | [DIAGNOSTICS.md](DIAGNOSTICS.md#log-lines-the-applications-secrets-masked-before-they-are-written) |
+| | Log lines with the application's own secrets masked before they are written - Logback converters for message and stack trace and an encoder for a whole line, the masker holding keyed fingerprints, never a secret: `seclume-logging` | [DIAGNOSTICS.md](DIAGNOSTICS.md#log-lines-the-applications-secrets-masked-before-they-are-written) |
 | | `seclume-admission`: a Kubernetes webhook that gives annotated pods a dump folder with a redacting sidecar and the SPIFFE socket | [DIAGNOSTICS.md](DIAGNOSTICS.md#injected-by-annotation-the-admission-webhook) |
 | **Your own library** | `seclume-core`'s secret classes for any client that holds a secret: mail, API keys, signing keys | [SECRETS-API.md](SECRETS-API.md) | [FEATURES.md](FEATURES.md#proving-there-is-no-secret-on-the-heap-for-any-application) |
 | **Kafka** | SASL/SCRAM, PLAIN and OAUTHBEARER with the password or token off the heap, PLAIN and OAUTHBEARER over seclume's own TLS 1.3: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |

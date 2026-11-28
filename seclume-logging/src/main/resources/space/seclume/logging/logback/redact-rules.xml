@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  seclume-logging's masking converters under every word Logback and Spring
+  Boot's Logback configuration write a message or a stack trace with. Include
+  it after Spring Boot's defaults.xml or base.xml, which register %wex and
+  %wEx for themselves; a rule registered later replaces an earlier one, and
+  applies to the appenders defined before it as well.
+
+  A pattern without a stack trace word gets one from Logback that no rule
+  reaches, and the MDC, key-value pairs and structured encoders use no rule:
+  RedactingEncoder masks a whole line.
+
+  The "class" attribute needs Logback 1.5 or later.
+-->
+<included>
+  <conversionRule conversionWord="m" class="space.seclume.logging.logback.RedactingMessageConverter"/>
+  <conversionRule conversionWord="msg" class="space.seclume.logging.logback.RedactingMessageConverter"/>
+  <conversionRule conversionWord="message" class="space.seclume.logging.logback.RedactingMessageConverter"/>
+
+  <conversionRule conversionWord="ex" class="space.seclume.logging.logback.RedactingThrowableProxyConverter"/>
+  <conversionRule conversionWord="exception" class="space.seclume.logging.logback.RedactingThrowableProxyConverter"/>
+  <conversionRule conversionWord="throwable" class="space.seclume.logging.logback.RedactingThrowableProxyConverter"/>
+
+  <conversionRule conversionWord="xEx" class="space.seclume.logging.logback.RedactingThrowableConverter"/>
+  <conversionRule conversionWord="xException" class="space.seclume.logging.logback.RedactingThrowableConverter"/>
+  <conversionRule conversionWord="xThrowable" class="space.seclume.logging.logback.RedactingThrowableConverter"/>
+
+  <conversionRule conversionWord="rEx" class="space.seclume.logging.logback.RedactingRootCauseFirstConverter"/>
+  <conversionRule conversionWord="rootException" class="space.seclume.logging.logback.RedactingRootCauseFirstConverter"/>
+
+  <conversionRule conversionWord="wex" class="space.seclume.logging.logback.RedactingWhitespaceThrowableConverter"/>
+  <conversionRule conversionWord="wEx" class="space.seclume.logging.logback.RedactingExtendedWhitespaceThrowableConverter"/>
+</included>

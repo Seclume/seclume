@@ -55,23 +55,38 @@ public final class TextNumber {
             i = 1;
         }
         int capacity = buffer.capacity();
+        // Accumulated as a negative number, which reaches Long.MIN_VALUE, and
+        // checked at every digit: 18446744073709551621 used to come back as 5.
         long value = 0;
         while (i < length) {
             if (offset + i + 8 <= capacity) {
                 long eight = buffer.getLongLe(offset + i);
                 int take = Math.min(8, length - i);
                 for (int b = 0; b < take; b++) {
-                    // Little endian: the first byte of the value is the lowest.
-                    value = value * 10 + digit((int) ((eight >>> (b * 8)) & 0xff));
+                    value = accumulate(value, digit((int) ((eight >>> (b * 8)) & 0xff)));
                 }
                 i += take;
             } else {
-                value = value * 10 + digit(buffer.getByte(offset + i) & 0xff);
+                value = accumulate(value, digit(buffer.getByte(offset + i) & 0xff));
                 i++;
             }
         }
-        return negative ? -value : value;
+        if (negative) {
+            return value;
+        }
+        if (value == Long.MIN_VALUE) {
+            throw new NumberOutOfRange("out of range for a long");
+        }
+        return -value;
     }
+
+    private static long accumulate(long negativeSoFar, int digit) {
+        if (negativeSoFar < (Long.MIN_VALUE + digit) / 10) {
+            throw new NumberOutOfRange("out of range for a long");
+        }
+        return negativeSoFar * 10 - digit;
+    }
+
 
 
     /**

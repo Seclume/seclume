@@ -29,7 +29,7 @@ cleanup() {
 trap cleanup EXIT
 run() { # run <log> <extra JVM options...>
   local log=$1; shift
-  exec java --enable-native-access=ALL-UNNAMED -Djavax.net.ssl.trustStore="$secrets/vault-ca.p12" \
+  exec java --enable-native-access=ALL-UNNAMED -Dseclume.secret.providers=file -Djavax.net.ssl.trustStore="$secrets/vault-ca.p12" \
     -Djavax.net.ssl.trustStorePassword=changeit "$@" -cp "target/classes:target/lib/*" "$main" \
     > "$log" 2>&1
 }

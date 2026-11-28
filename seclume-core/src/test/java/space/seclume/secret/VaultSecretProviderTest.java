@@ -217,16 +217,49 @@ class VaultSecretProviderTest {
      * lease-less "refresh" decided it was due.
      */
     @Test
-    void aStaticSecretIsFetchedOnceAndKept() throws Exception {
+    void aStaticSecretIsKeptForItsMaximumAgeAndThenReadAgain() throws Exception {
+        // A KV secret has no lease, but it is rotated: a new version in Vault.
+        // It is kept for seclume.vault.kvMaxAgeSeconds (60) and read again after,
+        // or a rotation at the source would never be taken up.
         String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
         MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
         try (FakeVault vault = new FakeVault(200, answer);
              VaultSecretProvider provider = provider(vault, "secret/data/app", clock)) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 3; i++) {
                 assertEquals("hunter2", read(provider));
-                clock.advance(Duration.ofDays(30));
+                clock.advance(Duration.ofSeconds(20));
             }
-            assertEquals(1, vault.served(), vault.requests.toString());
+            assertEquals(1, vault.served(), "within the maximum age: " + vault.requests);
+            clock.advance(Duration.ofSeconds(1));
+            assertEquals("hunter2", read(provider));
+            assertEquals(2, vault.served(), "read again after the maximum age: " + vault.requests);
+        }
+    }
+
+    /** The maximum age is the setting: with kvMaxAgeSeconds=5, read again after five seconds. */
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock(
+            org.junit.jupiter.api.parallel.Resources.SYSTEM_PROPERTIES)
+    void theMaximumAgeIsConfigurable() throws Exception {
+        String before = System.getProperty("seclume.vault.kvMaxAgeSeconds");
+        System.setProperty("seclume.vault.kvMaxAgeSeconds", "5");
+        String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", clock)) {
+            assertEquals("hunter2", read(provider));
+            clock.advance(Duration.ofSeconds(4));
+            assertEquals("hunter2", read(provider));
+            assertEquals(1, vault.served(), "within five seconds: " + vault.requests);
+            clock.advance(Duration.ofSeconds(2));
+            assertEquals("hunter2", read(provider));
+            assertEquals(2, vault.served(), "read again after five seconds: " + vault.requests);
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.vault.kvMaxAgeSeconds");
+            } else {
+                System.setProperty("seclume.vault.kvMaxAgeSeconds", before);
+            }
         }
     }
 
@@ -243,6 +276,73 @@ class VaultSecretProviderTest {
             assertTrue(e.getMessage().contains("is 7 bytes and does not fit into the 6"),
                     e.getMessage());
             assertFalse(e.getMessage().contains("hunter2"), e.getMessage());
+        }
+    }
+
+    /**
+     * A KV secret rotated in Vault reaches a SecretWatch: within the KV age
+     * the provider answers what it read, after it - 61 s on - the new version,
+     * and the watch says it changed.
+     */
+    @Test
+    void aSecretWatchOverVaultSeesTheRotationAfterTheKvAge() throws Exception {
+        String v1 = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        String v2 = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter3\"}}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        java.util.concurrent.atomic.AtomicInteger changed =
+                new java.util.concurrent.atomic.AtomicInteger();
+        try (FakeVault vault = new FakeVault(200, v1, v2);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", clock);
+             SecretWatch watch = SecretWatch.start("app", provider, Duration.ofHours(1),
+                     changed::incrementAndGet)) {
+            assertFalse(watch.checkNow(), "a change within the KV age");
+            assertEquals(0, changed.get());
+            clock.advance(Duration.ofSeconds(61));
+            assertTrue(watch.checkNow(), "the rotation in Vault was not seen");
+            assertEquals(1, changed.get());
+            assertEquals("hunter3", read(provider));
+        }
+    }
+
+    /**
+     * An answer that cannot be read through - cut off, or not JSON - is an
+     * error, never "no lease_duration here": that would take a dynamic
+     * credential for a KV secret and keep it for the KV age.
+     */
+    @Test
+    void anUnreadableAnswerIsAnErrorNotAnAbsence() throws Exception {
+        for (String answer : new String[] {
+            "{\"lease_id\":\"database/creds/app/z\",\"lease_duration\":30,\"data\":{\"password\":\"C3c",
+            "{lease_duration:30,data:{password:\"C3c\"}}",
+            "{\"data\":{\"password\":\"C3c\"},\"lease_duration\":}"}) {
+            try (FakeVault vault = new FakeVault(200, answer);
+                 VaultSecretProvider provider = provider(vault, "database/creds/app",
+                         Clock.systemUTC())) {
+                assertThrows(SecretUnavailableException.class, () -> read(provider), answer);
+            }
+        }
+    }
+
+    /**
+     * A leased secret follows its lease, not the KV age: with a lease of 30 s
+     * it is read again after half of it, long before the 60 s a KV secret is
+     * kept - and not before.
+     */
+    @Test
+    void aLeasedSecretFollowsItsLeaseNotTheKvAge() throws Exception {
+        String answer = "{\"lease_id\":\"database/creds/app/y\",\"renewable\":false,"
+                + "\"lease_duration\":30,"
+                + "\"data\":{\"username\":\"v-token-app-2\",\"password\":\"B2b-generated\"}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "database/creds/app", clock)) {
+            assertEquals("B2b-generated", read(provider));
+            clock.advance(Duration.ofSeconds(10));
+            assertEquals("B2b-generated", read(provider));
+            assertEquals(1, vault.served(), "read again within half the lease: " + vault.requests);
+            clock.advance(Duration.ofSeconds(6));
+            assertEquals("B2b-generated", read(provider));
+            assertEquals(2, vault.served(), "not read again after half the lease: " + vault.requests);
         }
     }
 
@@ -283,6 +383,49 @@ class VaultSecretProviderTest {
                 assertEquals("once", read(provider));
             }
             assertEquals(1, vault.served(), "Vault was asked more than once");
+        }
+    }
+
+    /**
+     * Two logins at a refresh: the first took user U1, the second's
+     * currentUser() fetched U2 with P2 - and the first then read P2, a login
+     * that failed. Each thread gets the password of the user it was handed.
+     */
+    @Test
+    void aLoginGetsThePasswordOfItsOwnUserAcrossARefresh() throws Exception {
+        Instant start = Instant.parse("2026-09-20T12:00:00Z");
+        MovingClock clock = new MovingClock(start);
+        try (FakeVault vault = new FakeVault(200,
+                "{\"lease_duration\":3600,\"data\":{\"username\":\"u1\",\"password\":\"p1\"}}",
+                "{\"lease_duration\":3600,\"data\":{\"username\":\"u2\",\"password\":\"p2\"}}");
+             VaultSecretProvider provider = provider(vault, "database/creds/app", clock)) {
+            assertEquals("u1", provider.currentUser());              // the first login, here
+            clock.advance(Duration.ofMinutes(40));                   // past halfway
+            String[] other = new String[2];
+            Thread second = Thread.ofPlatform().start(() -> {
+                other[0] = provider.currentUser();
+                other[1] = read(provider);
+            });
+            second.join();
+            assertEquals("u2", other[0]);
+            assertEquals("p2", other[1]);
+            // Into a target of exactly its length: the password of its own user fits.
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment exact = arena.allocate(2);
+                assertEquals(2, provider.writeSecret(exact), "the first login's password");
+                assertEquals("p1", new String(exact.toArray(ValueLayout.JAVA_BYTE),
+                        StandardCharsets.UTF_8), "the first login got the second one's password");
+            }
+            // The pairing is for that one login: a later read is the current one's.
+            assertEquals("p2", read(provider), "a later read still got the user before's password");
+            java.lang.reflect.Field before = VaultSecretProvider.class
+                    .getDeclaredField("previousCredential");
+            before.setAccessible(true);
+            SecretScope kept = (SecretScope) before.get(provider);
+            AutoCloseable closing = provider;
+            closing.close();
+            assertThrows(IllegalStateException.class, kept::segment,
+                    "the user before's password was not wiped at close");
         }
     }
 

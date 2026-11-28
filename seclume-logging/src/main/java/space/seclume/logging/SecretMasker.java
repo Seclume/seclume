@@ -42,7 +42,9 @@ import space.seclume.secret.SecretScope;
  *   <li>percent-encoded, as in a URL or a form ({@code p%40ss}, and
  *       {@code URLEncoder}'s {@code +} for a blank), with the hex digits in
  *       upper or in lower case;</li>
- *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs).</li>
+ *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs);</li>
+ *   <li>with XML's and HTML's character references ({@code &amp;}, {@code &lt;},
+ *       {@code &#39;}, {@code &#x2F;}), as an XML formatter or layout writes it.</li>
  * </ul>
  * Secrets shorter than
  * {@value #SHORTEST} characters are not looked for: they would mask ordinary
@@ -125,6 +127,30 @@ public final class SecretMasker implements AutoCloseable {
     private volatile boolean closed;
     /** Wiped for a checkpoint; the next {@link #mask} makes a new key and reads the secrets. */
     private volatile boolean forgotten;
+    /** The forms by label, kept for a refresh whose provider fails. */
+    private Map<String, List<Form>> byLabel = new LinkedHashMap<>();
+    /** The forms a label had before its last rotation - looked for until the next refresh. */
+    private final Map<String, List<Form>> retiring = new LinkedHashMap<>();
+
+    private static boolean sameForms(List<Form> a, List<Form> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i).fingerprint() != b.get(i).fingerprint()
+                    || !java.util.Arrays.equals(a.get(i).tag(), b.get(i).tag())) {
+                return false;
+            }
+        }
+        return true;
+    }
+    /** A secret could not be read and nothing earlier is kept for it - retry soon. */
+    private volatile boolean incomplete;
+
+    /** Whether every secret is looked for; false asks the scheduler to retry early. */
+    public boolean complete() {
+        return !incomplete;
+    }
 
     /**
      * @param providers the secrets to look for, by the label a masked one is
@@ -166,18 +192,76 @@ public final class SecretMasker implements AutoCloseable {
             return;
         }
         index = Index.EMPTY;
+        byLabel = new LinkedHashMap<>();
+        retiring.clear();
         key.close();
         forgotten = true;
     }
 
-    /** After a restore: a new key, and the secrets read again. */
-    private synchronized void restore() {
+    /** How long a line waits for the secrets to be read again after a restore. */
+    static final long RESTORE_WAIT_MILLIS = 2000;
+
+    /** What a line is written as that the masker cannot check yet. */
+    static final String WITHHELD = "[seclume: line withheld - the secrets to mask it with are "
+            + "still being read after a restore]";
+
+    /** The reading started after a restore, until it is done. */
+    private java.util.concurrent.CompletableFuture<Void> restoring;
+
+    /**
+     * After a restore: a new key, and the secrets read again - on a thread of
+     * its own. It used to be the logging thread's, inside this lock: a vault
+     * that took its time held every thread that logged.
+     */
+    private synchronized java.util.concurrent.CompletableFuture<Void> restore() {
+        if (restoring != null) {
+            return restoring;
+        }
         if (!forgotten || closed) {
-            return;
+            return null;
         }
         key = newKey();
-        forgotten = false;
-        refresh();
+        java.util.concurrent.CompletableFuture<Void> done = new java.util.concurrent.CompletableFuture<>();
+        restoring = done;
+        Thread.ofVirtual().name("seclume-log-restore").start(() -> {
+            try {
+                read();
+            } catch (RuntimeException | Error e) {
+                LOG.log(System.Logger.Level.WARNING, "seclume: the secrets could not be read "
+                        + "again after a restore; lines are masked for what could be read: "
+                        + e.getMessage());
+                incomplete = true;
+            } finally {
+                synchronized (this) {
+                    forgotten = false;
+                    restoring = null;
+                }
+                done.complete(null);
+            }
+        });
+        return done;
+    }
+
+    /**
+     * Waits a bounded while for the reading after a restore; false when it is
+     * not done by then - the line is then withheld, not written unmasked.
+     */
+    private boolean restored() {
+        java.util.concurrent.CompletableFuture<Void> pending = restore();
+        if (pending == null) {
+            return true;
+        }
+        try {
+            pending.get(RESTORE_WAIT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return true;
+        } catch (java.util.concurrent.TimeoutException notYet) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (java.util.concurrent.ExecutionException cannot) {
+            return true;
+        }
     }
 
     /** Makes {@code masker} the one {@link #maskInstalled} and the Logback converters use. */
@@ -196,20 +280,65 @@ public final class SecretMasker implements AutoCloseable {
         return index.forms().size();
     }
 
-    /** Reads every secret again and keeps its fingerprints instead of the old ones. */
+    /**
+     * Reads every secret again and keeps its fingerprints instead of the old
+     * ones. After a checkpoint, before the first line, it starts the reading
+     * a restore needs instead - the key it would fingerprint with is wiped.
+     */
     public synchronized void refresh() {
+        if (forgotten) {
+            restore();
+            return;
+        }
+        read();
+    }
+
+    private synchronized void read() {
         List<Form> next = new ArrayList<>();
+        Map<String, List<Form>> kept = new LinkedHashMap<>();
+        boolean missing = false;
         for (Map.Entry<String, SecretProvider> entry : providers.get().entrySet()) {
+            List<Form> mine = new ArrayList<>();
             try (SecretScope secret = SecretScope.fromProvider(entry.getValue())) {
                 if (secret.length() > 0) {
-                    forms(entry.getKey(), secret.secret(), secret.length(), next);
+                    forms(entry.getKey(), secret.secret(), secret.length(), mine);
                 }
             } catch (RuntimeException unavailable) {
+                // Fail closed: what was looked for until now stays looked for.
+                // A label that was never read is no earlier reading: its empty
+                // list kept the next failed refresh from asking for a retry.
+                List<Form> before = byLabel.get(entry.getKey());
+                if (before != null && !before.isEmpty()) {
+                    mine = before;
+                } else {
+                    before = null;
+                    missing = true;
+                }
                 LOG.log(System.Logger.Level.WARNING, "seclume: the secret " + entry.getKey()
-                        + " could not be read, so log lines are not masked for it: "
+                        + " could not be read; " + (before != null
+                        ? "the forms read before are still looked for: "
+                        : "log lines are not masked for it until it can be: ")
                         + unavailable.getMessage());
             }
+            kept.put(entry.getKey(), mine);
+            next.addAll(mine);
+            // A rotated secret: the old one is looked for one cycle longer.
+            // MySQL's RETAIN CURRENT PASSWORD, a rollout in progress - the old
+            // password is still good, and still turns up in lines, for a while.
+            List<Form> before = byLabel.get(entry.getKey());
+            if (before != null && !before.isEmpty() && !sameForms(before, mine)) {
+                retiring.put(entry.getKey(), before);
+            } else {
+                retiring.remove(entry.getKey());
+            }
+            List<Form> old = retiring.get(entry.getKey());
+            if (old != null) {
+                next.addAll(old);
+            }
         }
+        retiring.keySet().retainAll(kept.keySet());
+        byLabel = kept;
+        incomplete = missing;
         // Longest first: where two overlap, the longer one wins.
         next.sort(Comparator.comparingInt(Form::length).reversed());
         index = Index.of(next, base());
@@ -423,47 +552,33 @@ public final class SecretMasker implements AutoCloseable {
      * {@code [redacted:<label>]} - the same instance when there is none.
      */
     public String mask(String text) {
-        if (forgotten && text != null && !closed) {
-            restore();
+        if (forgotten && text != null && !closed && !restored()) {
+            return WITHHELD;
         }
         Index scanned = index;
         List<Form> now = scanned.forms();
         if (text == null || now.isEmpty() || closed) {
             return text;
         }
-        int size = text.length();
-        long base = scanned.base();
-        List<int[]> hits = null;
-        for (int l = 0; l < scanned.lengths().length; l++) {
-            int length = scanned.lengths()[l];
-            if (length > size) {
-                continue;
-            }
-            long power = scanned.powers()[l];
-            int from = scanned.first()[l];
-            int to = scanned.first()[l + 1];
-            long rolling = 0;
-            for (int i = 0; i < length; i++) {
-                rolling = rolling * base + text.charAt(i);
-            }
-            for (int start = 0; ; start++) {
-                for (int f = from; f < to; f++) {
-                    Form form = now.get(f);
-                    if (form.fingerprint() == rolling
-                            && (hits == null || !covered(hits, start, start + length))
-                            && confirmed(text, start, form)) {
-                        if (hits == null) {
-                            hits = new ArrayList<>();
-                        }
-                        hits.add(new int[] {start, start + length, f});
-                    }
-                }
-                if (start + length >= size) {
-                    break;
-                }
-                rolling = (rolling - text.charAt(start) * power) * base
-                        + text.charAt(start + length);
-            }
+        List<int[]> hits = scan(scanned, text.length(), text::charAt, null, null);
+        // The secret as encoders write it is more than the forms above: an
+        // encoder that percent-encodes only what its part of a URL does not
+        // allow (java.net.URI, Spring's, OkHttp's: p@ss%20word), or a JSON
+        // writer that escapes = ' < > & as backslash-u-003d (Gson's default). So the line
+        // is also read decoded - percent-decoded, with and without + for a
+        // blank, and JSON-unescaped - in native memory, and a secret found
+        // there is masked where its encoded form stands in the line.
+        if (text.indexOf('%') >= 0 || text.indexOf('+') >= 0) {
+            hits = viewed(scanned, text, View.PERCENT, hits);
+            hits = viewed(scanned, text, View.FORM, hits);
+        }
+        if (text.indexOf('\\') >= 0) {
+            hits = viewed(scanned, text, View.JSON, hits);
+        }
+        // XML and HTML: java.util.logging's XMLFormatter, Log4j 2's %enc{...}{XML}
+        // and {HTML}, XML and HTML layouts write & < > " ' as entities, named or numeric.
+        if (text.indexOf('&') >= 0) {
+            hits = viewed(scanned, text, View.MARKUP, hits);
         }
         if (hits == null) {
             return text;
@@ -472,7 +587,11 @@ public final class SecretMasker implements AutoCloseable {
         StringBuilder masked = new StringBuilder(text.length());
         int at = 0;
         for (int[] hit : hits) {
+            if (hit[1] <= at) {
+                continue;                          // inside what was masked already
+            }
             if (hit[0] < at) {
+                at = hit[1];                       // overlaps: the mask goes on to its end
                 continue;
             }
             masked.append(text, at, hit[0]).append("[redacted:").append(now.get(hit[2]).label())
@@ -482,9 +601,303 @@ public final class SecretMasker implements AutoCloseable {
         return masked.append(text, at, text.length()).toString();
     }
 
+    /** A character of a text or of a view of it. */
+    @FunctionalInterface
+    private interface Chars {
+        char at(int i);
+    }
+
+    /**
+     * Where the forms are in {@code size} characters: {start, end, form}, in the
+     * text's own positions - through {@code from} and {@code to} for a view.
+     */
+    private List<int[]> scan(Index scanned, int size, Chars chars, int[] from, int[] to) {
+        List<Form> now = scanned.forms();
+        long base = scanned.base();
+        List<int[]> hits = null;
+        for (int l = 0; l < scanned.lengths().length; l++) {
+            int length = scanned.lengths()[l];
+            if (length > size) {
+                continue;
+            }
+            long power = scanned.powers()[l];
+            int first = scanned.first()[l];
+            int last = scanned.first()[l + 1];
+            long rolling = 0;
+            for (int i = 0; i < length; i++) {
+                rolling = rolling * base + chars.at(i);
+            }
+            for (int start = 0; ; start++) {
+                for (int f = first; f < last; f++) {
+                    Form form = now.get(f);
+                    if (form.fingerprint() == rolling
+                            && (hits == null || !covered(hits, start, start + length))
+                            && confirmed(chars, start, form)) {
+                        if (hits == null) {
+                            hits = new ArrayList<>();
+                        }
+                        hits.add(new int[] {start, start + length, f});
+                    }
+                }
+                if (start + length >= size) {
+                    break;
+                }
+                rolling = (rolling - chars.at(start) * power) * base + chars.at(start + length);
+            }
+        }
+        if (hits != null && from != null) {
+            for (int[] hit : hits) {
+                int end = to[hit[1] - 1];
+                hit[0] = from[hit[0]];
+                hit[1] = end;
+            }
+        }
+        return hits;
+    }
+
+    /** How a line is read decoded. */
+    private enum View { PERCENT, FORM, JSON, MARKUP }
+
+    /** {@code hits} and those found in {@code text} read as {@code view}. */
+    private List<int[]> viewed(Index scanned, String text, View view, List<int[]> hits) {
+        int size = text.length();
+        int[] from = new int[size];
+        int[] to = new int[size];
+        try (SecretScope decoded = SecretScope.allocate(Math.max(2, size * 2));
+             SecretScope bytes = SecretScope.allocate(Math.max(1, size))) {
+            MemorySegment out = decoded.segment();
+            int count = switch (view) {
+                case JSON -> unescaped(text, out, from, to);
+                case MARKUP -> entitiesRead(text, out, from, to);
+                default -> percentDecoded(text, view == View.FORM, out, bytes.segment(), from, to);
+            };
+            if (count < 0) {
+                return hits;                          // nothing decoded: the text itself
+            }
+            List<int[]> found = scan(scanned, count,
+                    i -> out.get(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i), from, to);
+            if (found == null) {
+                return hits;
+            }
+            if (hits == null) {
+                return found;
+            }
+            hits.addAll(found);
+            return hits;
+        }
+    }
+
+    /**
+     * {@code text} percent-decoded into {@code out} as UTF-16 - UTF-8 runs of
+     * {@code %XX} as their characters, and with {@code form} a {@code +} as a
+     * blank - its length, or -1 where nothing was decoded. {@code from} and
+     * {@code to} get where each character's encoding begins and ends.
+     */
+    static int percentDecoded(String text, boolean form, MemorySegment out, MemorySegment bytes,
+            int[] from, int[] to) {
+        int at = 0;
+        boolean changed = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (c == '%' && hexAt(text, i)) {
+                int start = i;
+                int n = 0;
+                int[] ends = new int[text.length()];
+                while (i < text.length() && text.charAt(i) == '%' && hexAt(text, i)) {
+                    bytes.set(ValueLayout.JAVA_BYTE, n, (byte) Integer.parseInt(text, i + 1, i + 3, 16));
+                    i += 3;
+                    ends[n++] = i;
+                }
+                // The run as UTF-8, a character at a time; a byte that is not
+                // part of a whole sequence stands for itself.
+                int k = 0;
+                while (k < n) {
+                    int b = bytes.get(ValueLayout.JAVA_BYTE, k) & 0xff;
+                    int length = b < 0x80 ? 1 : (b & 0xe0) == 0xc0 ? 2 : (b & 0xf0) == 0xe0 ? 3
+                            : (b & 0xf8) == 0xf0 ? 4 : 1;
+                    if (k + length > n) {
+                        length = 1;
+                    }
+                    int units = length == 1 ? 1 : utf16Units(bytes.asSlice(k, length), length);
+                    if (units < 0) {
+                        length = 1;
+                        units = 1;
+                    }
+                    int begin = k == 0 ? start : ends[k - 1];
+                    if (length == 1) {
+                        out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, (char) b);
+                    } else {
+                        utf16(bytes.asSlice(k, length), length, out.asSlice(2L * at, 2L * units));
+                    }
+                    for (int u = 0; u < units; u++) {
+                        from[at + u] = begin;
+                        to[at + u] = ends[k + length - 1];
+                    }
+                    at += units;
+                    k += length;
+                }
+                changed = true;
+                continue;
+            }
+            char put = form && c == '+' ? ' ' : c;
+            changed |= put != c;
+            out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, put);
+            from[at] = i;
+            to[at] = i + 1;
+            at++;
+            i++;
+        }
+        return changed ? at : -1;
+    }
+
+    private static boolean hexAt(String text, int percent) {
+        return percent + 2 < text.length() && Character.digit(text.charAt(percent + 1), 16) >= 0
+                && Character.digit(text.charAt(percent + 2), 16) >= 0;
+    }
+
+    /**
+     * {@code text} with JSON's escapes read - a backslash, u and four hex digits, and the short ones -
+     * into {@code out}, its length, or -1 where there were none.
+     */
+    static int unescaped(String text, MemorySegment out, int[] from, int[] to) {
+        int at = 0;
+        boolean changed = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            int next = i + 1;
+            if (c == '\\' && i + 1 < text.length()) {
+                char e = text.charAt(i + 1);
+                char decoded = switch (e) {
+                    case '"', '\\', '/' -> e;
+                    case 'n' -> '\n';
+                    case 'r' -> '\r';
+                    case 't' -> '\t';
+                    case 'b' -> '\b';
+                    case 'f' -> '\f';
+                    default -> 0;
+                };
+                if (e == 'u' && i + 6 <= text.length()
+                        && isHex(text, i + 2, i + 6)) {
+                    c = (char) Integer.parseInt(text, i + 2, i + 6, 16);
+                    next = i + 6;
+                    changed = true;
+                } else if (decoded != 0) {
+                    c = decoded;
+                    next = i + 2;
+                    changed = true;
+                }
+            }
+            out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, c);
+            from[at] = i;
+            to[at] = next;
+            at++;
+            i = next;
+        }
+        return changed ? at : -1;
+    }
+
+    /**
+     * {@code text} with XML's and HTML's character references read - {@code &amp;},
+     * {@code &lt;}, {@code &gt;}, {@code &quot;}, {@code &apos;}, and {@code &#NN;} or
+     * {@code &#xHH;} for any character - into {@code out}, its length, or -1 where there
+     * were none. A reference that is none of these stands for itself.
+     */
+    static int entitiesRead(String text, MemorySegment out, int[] from, int[] to) {
+        int at = 0;
+        boolean changed = false;
+        int i = 0;
+        // The next ';' at or after a position, found once and looked for again
+        // only once it is behind: a line of nothing but '&' read each of them
+        // up to 32 characters on.
+        int nextSemicolon = -1;
+        while (i < text.length()) {
+            int end = -1;
+            if (text.charAt(i) == '&') {
+                if (nextSemicolon != Integer.MAX_VALUE && nextSemicolon < i + 2) {
+                    int found = text.indexOf(';', i + 2);
+                    nextSemicolon = found < 0 ? Integer.MAX_VALUE : found;
+                }
+                end = nextSemicolon <= i + 32 ? nextSemicolon : -1;
+            }
+            int point = end > 0 ? entity(text, i + 1, end) : -1;
+            if (point < 0) {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, text.charAt(i));
+                from[at] = i;
+                to[at] = i + 1;
+                at++;
+                i++;
+                continue;
+            }
+            for (char c : Character.toChars(point)) {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, c);
+                from[at] = i;
+                to[at] = end + 1;
+                at++;
+            }
+            changed = true;
+            i = end + 1;
+        }
+        return changed ? at : -1;
+    }
+
+    /** The character the reference between {@code start} and {@code end} names, or -1. */
+    static int entity(String text, int start, int end) {
+        String name = text.substring(start, end);
+        switch (name) {
+            case "amp": return '&';
+            case "lt": return '<';
+            case "gt": return '>';
+            case "quot": return '"';
+            case "apos": return '\'';
+            default: break;
+        }
+        if (name.length() < 2 || name.charAt(0) != '#') {
+            return -1;
+        }
+        boolean hex = name.charAt(1) == 'x' || name.charAt(1) == 'X';
+        int radix = hex ? 16 : 10;
+        int first = hex ? 2 : 1;
+        if (first == name.length()) {
+            return -1;
+        }
+        long point = 0;
+        for (int k = first; k < name.length(); k++) {
+            char c = name.charAt(k);
+            // ASCII digits only, as XML has them; leading zeros allowed.
+            int d = c >= '0' && c <= '9' ? c - '0'
+                    : hex && c >= 'a' && c <= 'f' ? c - 'a' + 10
+                    : hex && c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (d < 0) {
+                return -1;
+            }
+            point = point * radix + d;
+            if (point > Character.MAX_CODE_POINT) {
+                return -1;
+            }
+        }
+        return (int) point;
+    }
+
+    private static boolean isHex(String text, int start, int end) {
+        for (int i = start; i < end; i++) {
+            if (Character.digit(text.charAt(i), 16) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether a match lies wholly inside one found already. Only then is it
+     * nothing new: one that overlaps a found one only in part reaches beyond
+     * it, and dropped, that part of the shorter secret went out unmasked. The
+     * masking takes the union of what overlaps.
+     */
     private static boolean covered(List<int[]> hits, int start, int end) {
         for (int[] hit : hits) {
-            if (start < hit[1] && end > hit[0]) {
+            if (start >= hit[0] && end <= hit[1]) {
                 return true;
             }
         }
@@ -492,11 +905,11 @@ public final class SecretMasker implements AutoCloseable {
     }
 
     /** Whether the window's tag is the form's - the window copied to native memory and wiped. */
-    private boolean confirmed(String text, int start, Form form) {
+    private boolean confirmed(Chars text, int start, Form form) {
         try (SecretScope window = SecretScope.allocate(form.length() * 2)) {
             for (int i = 0; i < form.length(); i++) {
                 window.segment().set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i,
-                        text.charAt(start + i));
+                        text.at(start + i));
             }
             byte[] tag = tag(window.segment(), form.length());
             int difference = 0;

@@ -101,7 +101,7 @@ class SeclumeCdiExtensionTest {
     static void startTheContainer() throws Exception {
         StubDriver.INSTANCE.urls.size();
         keyFile = Files.createTempFile("seclume-helidon-cdi", ".key");
-        Files.writeString(keyFile, Base64.getEncoder().encodeToString(new byte[32]));
+        Files.writeString(keyFile, Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef".getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
         // System properties: a source every MicroProfile Config has, and the
         // one Helidon's container still reads after it has built its own
         // configuration on start - a config registered here would be replaced.

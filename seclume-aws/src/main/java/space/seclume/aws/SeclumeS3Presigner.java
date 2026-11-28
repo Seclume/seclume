@@ -96,6 +96,9 @@ public final class SeclumeS3Presigner {
             segments.add(AwsSigV4.urlEncode(segment));
         }
         String path = String.join("/", segments);
+        if (endpoint == null) {
+            bucketAsHost(bucket);
+        }
         URI uri = endpoint == null
                 ? URI.create("https://" + bucket + ".s3." + region + ".amazonaws.com/" + path)
                 : URI.create(endpoint.toString().replaceAll("/+$", "") + "/"
@@ -116,6 +119,22 @@ public final class SeclumeS3Presigner {
             return signed.getUri().toURL();
         } catch (MalformedURLException e) {
             throw new IllegalStateException("the presigned URL is not a URL", e);
+        }
+    }
+
+    /**
+     * A bucket name as S3 takes one - and so one that can be the first label of
+     * the URL's host. Anything else was put into the host as it was: a bucket
+     * {@code evil.example#} made a URL for {@code evil.example}, signed and
+     * handed out as a link to S3.
+     */
+    static void bucketAsHost(String bucket) {
+        if (bucket == null || !bucket.matches("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
+                || bucket.contains("..") || bucket.contains(".-") || bucket.contains("-.")
+                || bucket.matches("[0-9]+(\\.[0-9]+){3}")) {
+            throw new IllegalArgumentException("'" + bucket + "' is not an S3 bucket name: 3 to 63 "
+                    + "lower-case letters, digits, dots and hyphens, beginning and ending with a "
+                    + "letter or digit, not an IP address");
         }
     }
 

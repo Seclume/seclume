@@ -125,7 +125,7 @@ final class AzureKeyVaultKey implements KmsSigningKey.Service {
 
     /** A JWK's base64url number, public: a coordinate, a modulus, an exponent. */
     private static java.math.BigInteger unsigned(String base64url) { // seclume-allow: a public key's numbers
-        return new java.math.BigInteger(1, Base64.getUrlDecoder().decode(base64url)); // seclume-allow: a public key's numbers
+        return new java.math.BigInteger(1, space.seclume.internal.Base64Text.decodeUrl(base64url)); // seclume-allow: a public key's numbers
     }
 
     @Override
@@ -142,7 +142,7 @@ final class AzureKeyVaultKey implements KmsSigningKey.Service {
                 + API_VERSION, "{\"alg\":\"" + algorithm + "\",\"value\":\""
                 + Base64.getUrlEncoder().withoutPadding().encodeToString(hash) // seclume-allow: a public hash
                 + "\"}");
-        byte[] signature = Base64.getUrlDecoder().decode(field(answer, "value")); // seclume-allow: a public signature
+        byte[] signature = space.seclume.internal.Base64Text.decodeUrl(field(answer, "value")); // seclume-allow: a public signature
         return ec ? KmsSigningKey.derFromRaw(signature) : signature;
     }
 

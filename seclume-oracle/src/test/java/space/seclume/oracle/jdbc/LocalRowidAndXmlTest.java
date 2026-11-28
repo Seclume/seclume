@@ -61,7 +61,7 @@ class LocalRowidAndXmlTest {
         }
         url = "jdbc:seclume:oracle://" + host + ":" + port + "/"
                 + System.getProperty("seclume.oracle.service", "FREEPDB1")
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace(java.io.File.separatorChar, '/');
     }
 

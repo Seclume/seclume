@@ -48,7 +48,15 @@ minute.
 | `sidecar.image` | the webhook's image | an image with Java 25 and `seclume-heapcheck.jar` |
 | `spiffe.csiDriver` | `csi.spiffe.io` | |
 | `spiffe.hostPath` | - | a host directory with the socket, instead of the CSI driver |
+| `spiffe.namespaces` | - | with `hostPath`, required: the namespaces whose pods get the socket |
 | `spiffe.mountPath`, `spiffe.socket` | `/spiffe-workload-api`, `spire-agent.sock` | |
+
+**A `hostPath` socket is a host directory in the pod.** Pod Security admission sees it - the
+`baseline` and `restricted` levels refuse a pod with a `hostPath` volume, and they judge the pod
+after this webhook has added it. So `spiffe.hostPath` works only in namespaces whose level
+allows it (`privileged`), and the webhook adds it only to pods of the namespaces in
+`spiffe.namespaces` - without that list it refuses to start with `hostPath` set. Prefer the
+SPIFFE CSI driver (`spiffe.csiDriver`), which every Pod Security level allows.
 
 The pod runs as non-root with a read-only root file system and no capabilities
 (`podSecurityContext`, `securityContext`).

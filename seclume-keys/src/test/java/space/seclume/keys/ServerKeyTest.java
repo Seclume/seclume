@@ -51,6 +51,8 @@ class ServerKeyTest {
     static KeyFiles rsa;
     static KeyFiles ec256;
     static KeyFiles ec384;
+    /** Only where OpenSSL holds the key: CNG has no Ed25519. */
+    static KeyFiles ed25519;
 
     @BeforeAll
     static void keys() throws Exception {
@@ -58,12 +60,16 @@ class ServerKeyTest {
         rsa = KeyFiles.make(directory.resolve("rsa"), "rsa:2048");
         ec256 = KeyFiles.make(directory.resolve("ec256"), "ec:P-256");
         ec384 = KeyFiles.make(directory.resolve("ec384"), "ec:P-384");
+        if (!System.getProperty("os.name", "").startsWith("Windows")) {
+            ed25519 = KeyFiles.make(directory.resolve("ed25519"), "ed25519");
+        }
     }
 
     private static KeyFiles files(String name) {
         return switch (name) {
             case "rsa" -> rsa;
             case "ec256" -> ec256;
+            case "ed25519" -> ed25519;
             default -> ec384;
         };
     }
@@ -77,11 +83,31 @@ class ServerKeyTest {
             "rsa,   TLSv1.2, rsa_pkcs1_sha512",
             "ec256, TLSv1.3, ecdsa_secp256r1_sha256",
             "ec384, TLSv1.3, ecdsa_secp384r1_sha384",
-            "ec256, TLSv1.2, ecdsa_secp256r1_sha256"})
+            "ec256, TLSv1.2, ecdsa_secp256r1_sha256",
+            "ed25519, TLSv1.3, ed25519",
+            "ed25519, TLSv1.2, ed25519"})
     void aJdkClientConnects(String key, String protocol, String scheme) throws Exception {
         KeyFiles files = files(key);
+        assumeTrue(files != null, "no Ed25519 key here: CNG has none");
         SSLContext server = SeclumeKeys.sslContext(files.certificate(), files.spec());
         assertEquals("hello", roundTrip(server, files, protocol, scheme));
+    }
+
+    /**
+     * JSSE asks for an Ed25519 key by the name "EdDSA" or "Ed25519"; the key
+     * manager answers both, and nothing else for that key.
+     */
+    @Test
+    void anEd25519KeyIsChosenByEitherName() throws Exception {
+        assumeTrue(ed25519 != null, "no Ed25519 key here: CNG has none");
+        javax.net.ssl.X509ExtendedKeyManager manager =
+                SeclumeKeys.keyManager(ed25519.certificate(), ed25519.spec());
+        assertEquals(SeclumeKeyManager.ALIAS, manager.chooseServerAlias("EdDSA", null, null));
+        assertEquals(SeclumeKeyManager.ALIAS, manager.chooseEngineServerAlias("Ed25519", null, null));
+        assertEquals(SeclumeKeyManager.ALIAS, manager.chooseClientAlias(
+                new String[] {"RSA", "EC", "Ed25519"}, null, null));
+        org.junit.jupiter.api.Assertions.assertNull(manager.chooseServerAlias("EC", null, null));
+        org.junit.jupiter.api.Assertions.assertNull(manager.chooseServerAlias("RSA", null, null));
     }
 
     /** The server's CertificateVerify, signed with the opaque key, is a Signature event. */

@@ -77,6 +77,30 @@ public final class ClientIdentities {
     /** A PKCS#11 module whose token holds the key - see {@link Pkcs11ClientIdentity}. */
     public static final String PKCS11 = "clientCertPkcs11";
 
+    /**
+     * The PKCS#11 modules a URL or Properties may name, separated by the
+     * platform's path separator: {@code -Dseclume.pkcs11.modules=/usr/lib/softhsm/libsofthsm2.so}.
+     * Loading a module runs its code in this process; a URL comes from
+     * configuration, which some applications let others write.
+     */
+    public static final String PKCS11_MODULES_PROPERTY = "seclume.pkcs11.modules";
+
+    /** Refuses a module the JVM was not started to allow - before anything is loaded. */
+    static void allowedModule(String module) {
+        java.nio.file.Path named = Path.of(module).toAbsolutePath().normalize();
+        String allowed = System.getProperty(PKCS11_MODULES_PROPERTY, "");
+        for (String entry : allowed.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            if (!entry.isBlank()
+                    && Path.of(entry.strip()).toAbsolutePath().normalize().equals(named)) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException(PKCS11 + " names the native library " + module
+                + ", which would be loaded and run in this process: a URL or Properties may name "
+                + "only modules the JVM is started to allow (-D" + PKCS11_MODULES_PROPERTY + "="
+                + named + "), or build the Pkcs11ClientIdentity in code. Nothing was loaded");
+    }
+
     /** The token's label; without it, the first token. */
     public static final String PKCS11_TOKEN = "clientCertPkcs11Token";
 
@@ -165,6 +189,7 @@ public final class ClientIdentities {
                 throw new IllegalArgumentException(PKCS11 + " names a client certificate's key, "
                         + "and so does the Windows store - one connection presents one");
             }
+            allowedModule(module);
             Map<String, String> pin = nested(settings, PIN_PREFIX);
             String certificate = settings.get(CERTIFICATE);
             String token = settings.get(PKCS11_TOKEN);
@@ -301,14 +326,70 @@ public final class ClientIdentities {
         return certificate + "\0" + new TreeMap<>(key);
     }
 
+    private static final java.util.concurrent.locks.ReentrantLock HANDSHAKES =
+            new java.util.concurrent.locks.ReentrantLock();
+    private static final java.util.concurrent.locks.Condition NONE_RUNNING =
+            HANDSHAKES.newCondition();
+    /** Handshakes signing with a client identity right now; under {@link #HANDSHAKES}. */
+    private static int running;
+
+    /**
+     * A handshake with a client identity begins - see {@link #closeAll()}.
+     * For seclume's TLS layers, which pair it with {@link #handshakeEnded()}.
+     */
+    public static void handshakeStarted() {
+        HANDSHAKES.lock();
+        try {
+            running++;
+        } finally {
+            HANDSHAKES.unlock();
+        }
+    }
+
+    /** That handshake is over, however it ended. */
+    public static void handshakeEnded() {
+        HANDSHAKES.lock();
+        try {
+            if (--running == 0) {
+                NONE_RUNNING.signalAll();
+            }
+        } finally {
+            HANDSHAKES.unlock();
+        }
+    }
+
     /**
      * Closes every identity and empties the cache.
      *
      * <p>For tests and for an application shutting down deliberately. After
-     * this the next {@link #of} builds afresh, which is why it is safe to call
-     * at any point where no handshake is running.
+     * this the next {@link #of} builds afresh. A handshake signing with an
+     * identity while it is closed would fail half way, so this waits for the
+     * running ones - ten seconds at most, then it warns and closes anyway.
      */
     public static void closeAll() {
+        closeAll(java.time.Duration.ofSeconds(10));
+    }
+
+    static void closeAll(java.time.Duration wait) {
+        HANDSHAKES.lock();
+        try {
+            long left = wait.toNanos();
+            while (running > 0) {
+                if (left <= 0) { // mutation-equivalent: the boundary is one nanosecond wide
+                    System.getLogger(ClientIdentities.class.getName()).log(
+                            System.Logger.Level.WARNING, running + " TLS handshake(s) with a "
+                                    + "client certificate still running after " + wait.toMillis()
+                                    + " ms - the identities are closed anyway, and those "
+                                    + "handshakes fail");
+                    break;
+                }
+                left = NONE_RUNNING.awaitNanos(left);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            HANDSHAKES.unlock();
+        }
         for (ClientIdentity identity : IDENTITIES.values()) {
             identity.close();
         }

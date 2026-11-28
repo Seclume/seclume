@@ -65,6 +65,11 @@ public interface Transport extends AutoCloseable {
         throw new IOException("this transport has no network timeout");
     }
 
+    /** The network timeout set with {@link #networkTimeout}; 0 for none, or where unknown. */
+    default int networkTimeoutMillis() {
+        return 0;
+    }
+
     /**
      * Sends one byte ahead of everything still queued - TCP urgent data.
      *

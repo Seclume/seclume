@@ -184,6 +184,24 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
         return requireAuth.toString();
     }
 
+    /** md5 answered to a server that has not proved who it is - see allowLegacyHashOverUnverifiedTls. */
+    private boolean allowLegacyHashOverUnverifiedTls =
+            space.seclume.postgresql.PgSession.Settings.legacyHashByDefault();
+
+    /**
+     * Answers md5 over a connection that did not check the server's
+     * certificate. Off: md5's answer is a fast hash a server in the middle can
+     * guess the password against; it goes only to a server that proved who it
+     * is (tls=verify-full or tlsPin).
+     */
+    public void setAllowLegacyHashOverUnverifiedTls(boolean allow) {
+        this.allowLegacyHashOverUnverifiedTls = allow;
+    }
+
+    public boolean isAllowLegacyHashOverUnverifiedTls() {
+        return allowLegacyHashOverUnverifiedTls;
+    }
+
     public void setTransport(String transport) {
         this.transport = transport == null || transport.isBlank() ? null : transport.trim();
     }
@@ -226,6 +244,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
         this.identity = settings.identity();
         this.directTls = settings.directTls();
         this.requireAuth = settings.requireAuth();
+        this.allowLegacyHashOverUnverifiedTls = settings.allowLegacyHashOverUnverifiedTls();
         this.database = settings.database();
         this.applicationName = settings.applicationName();
         this.tls = settings.tls();
@@ -240,7 +259,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
      * are two different promises: only {@code verify-full} checks who is at the
      * other end. See {@link TlsMode}.
      */
-    private TlsMode tls = TlsMode.PREFER;
+    private TlsMode tls = TlsMode.VERIFY_FULL;
 
     public void setTls(String mode) throws SQLException {
         this.tls = TlsMode.of(mode);
@@ -282,7 +301,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
                 provider, applicationName, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity(), directTls, requireAuth);
+                resolvedIdentity(), directTls, requireAuth, allowLegacyHashOverUnverifiedTls);
         PgSession session = space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> PgSession.open(settings)));

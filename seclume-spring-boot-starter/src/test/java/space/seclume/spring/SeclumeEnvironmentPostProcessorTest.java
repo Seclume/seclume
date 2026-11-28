@@ -322,6 +322,35 @@ class SeclumeEnvironmentPostProcessorTest {
         }
     }
 
+    /** Names a secret goes by that the guard did not know: keys, an API key, pwd, credentials. */
+    @Test
+    void theNamesOfKeysAndCredentials() {
+        for (String name : List.of("app.secret-key", "APP_SECRET_KEY", "aws.access-key",
+                "app.api-key", "APP_APIKEY", "db.pwd", "DB_PWD", "smtp.credentials")) {
+            assertTrue(SeclumeEnvironmentPostProcessor.isSuspect(name), name);
+        }
+        for (String name : List.of("app.token-uri", "app.pwd-policy", "app.keyring")) {
+            assertFalse(SeclumeEnvironmentPostProcessor.isSuspect(name), name);
+        }
+    }
+
+    /**
+     * {@code ${DB_PASSWORD:SuperSecret}} is the secret in plain text, used
+     * whenever the variable is not set; a placeholder without a default, or
+     * whose default is a placeholder, is a reference.
+     */
+    @Test
+    void aPlaceholdersPlainDefaultIsAValue() {
+        for (String value : List.of("${DB_PASSWORD:SuperSecret}", "pre${X}", "${X}post",
+                "${A:${B:inner-secret}}", "${A}${B:x}", "plain")) {
+            assertTrue(SeclumeEnvironmentPostProcessor.looksLikeAValue(value), value);
+        }
+        for (String value : List.of("${DB_PASSWORD}", "${A:${B}}", "${A:}", "  ${A}  ",
+                "${A}${B}", "")) {
+            assertFalse(SeclumeEnvironmentPostProcessor.looksLikeAValue(value), value);
+        }
+    }
+
     // ------------------------------------------------------- registration --
 
     /**

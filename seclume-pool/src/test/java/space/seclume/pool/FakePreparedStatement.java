@@ -41,6 +41,10 @@ final class FakePreparedStatement {
     final Set<String> failing = ConcurrentHashMap.newKeySet();
     /** Methods that throw unchecked from now on. */
     final Set<String> failingUnchecked = ConcurrentHashMap.newKeySet();
+    /** What the last execution left unread, or null. */
+    volatile ResultSet resultSet;
+    /** The arguments getMoreResults was called with. */
+    final List<Object> moreResults = new CopyOnWriteArrayList<>();
 
     FakePreparedStatement() {
         this.proxy = (PreparedStatement) Proxy.newProxyInstance(
@@ -105,6 +109,13 @@ final class FakePreparedStatement {
                             yield null;
                         }
                         case "isClosed" -> closed;
+                        // What a driver says once the result of the last execution
+                        // is read: none left - the cache asks before it keeps one.
+                        case "getResultSet" -> resultSet;
+                        case "getMoreResults" -> {
+                            moreResults.add(args == null ? "none" : args[0]);
+                            yield false;
+                        }
                         case "hashCode" -> System.identityHashCode(self);
                         case "equals" -> self == args[0];
                         case "toString" -> "FakePreparedStatement";

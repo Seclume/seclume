@@ -247,7 +247,7 @@ public final class VaultPkiIssuer implements AutoCloseable {
             int length = response.bodyLength();
             List<X509Certificate> chain = new ArrayList<>(
                     certificates(text(arena, answer, length, "data", "certificate")));
-            if (JsonOff.has(answer, length, "data", "issuing_ca")) {
+            if (JsonOff.present(answer, length, "data", "issuing_ca")) {
                 for (X509Certificate issuer : certificates(
                         text(arena, answer, length, "data", "issuing_ca"))) {
                     if (!issuer.equals(chain.get(0))) {

@@ -54,6 +54,23 @@ class CommandLineTest {
                 "a check that could not run reported a clean heap: " + result.output());
     }
 
+    /**
+     * --keep-dump to a path that exists deleted the file there - the JVM
+     * insists on writing its dump itself. It is refused now, as --redact is.
+     */
+    @Test
+    void keepDumpDoesNotReplaceAFile(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path taken = java.nio.file.Files.writeString(dir.resolve("taken.hprof"),
+                "somebody's file");
+        java.nio.file.Path secret = java.nio.file.Files.writeString(dir.resolve("s"), "secret-x1");
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class, List.of("--pid", "1",
+                "--secret-file", secret.toString(), "--keep-dump", taken.toString()), 60);
+        assertEquals(2, result.exitCode(), result.output());
+        assertTrue(result.output().contains("the file exists"), result.output());
+        assertEquals("somebody's file", java.nio.file.Files.readString(taken));
+    }
+
     /** A dump and a process at once is a misuse, not a guess at which was meant. */
     @Test
     void aDumpAndAProcessTogetherAreRefused() throws Exception {
@@ -283,5 +300,35 @@ class CommandLineTest {
         java.nio.file.Path dump = java.nio.file.Files.writeString(dir.resolve("x.hprof"), "x");
         assertEquals(2, ChildJvm.run(HeapCheck.class, List.of("--dump", dump.toString()), 60)
                 .exitCode());
+    }
+
+    /**
+     * A recording that names no secret - the events that would hold the
+     * environment, properties and arguments are not in it - checked with
+     * nothing named and no discovery: nothing is looked for, so "nothing
+     * found" and exit 0 would pass a gate that checked nothing.
+     */
+    @Test
+    void aRecordingThatNamesNoSecretIsNoCleanResultOnItsOwn(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path recording = dir.resolve("quiet.jfr");
+        try (jdk.jfr.Recording quiet = new jdk.jfr.Recording()) {
+            quiet.enable("jdk.CPULoad");   // no environment, no properties, no arguments
+            quiet.start();
+            quiet.stop();
+            quiet.dump(recording);
+        }
+        assertTrue(space.seclume.heapdump.Recordings.secretSettings(recording).isEmpty());
+
+        ChildJvm.Result check = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString()), 120);
+        assertEquals(2, check.exitCode(), check.output());
+        assertTrue(check.output().contains("names no secret"), check.output());
+        assertTrue(!check.output().contains("NOT FOUND"), check.output());
+
+        ChildJvm.Result discovered = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString(), "--discover"), 120);
+        assertEquals(0, discovered.exitCode(), "discovery is something to look for: "
+                + discovered.output());
     }
 }

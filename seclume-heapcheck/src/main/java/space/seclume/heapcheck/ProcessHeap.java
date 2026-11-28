@@ -16,13 +16,11 @@ import com.sun.tools.attach.VirtualMachine;
 /**
  * A heap dump of <b>another</b> process.
  *
- * <p>Three JDK mechanisms in a row, and each of them is the documented way to
- * do its step: the attach API joins the target process, its management agent is
- * started if it is not running yet, and the dump is asked for through the same
- * {@code HotSpotDiagnosticMXBean} a process uses on itself. Where the process
- * refuses that - a serialization filter that rejects what JMX sends over RMI,
- * as Helidon's does - the JDK's {@code jcmd} asks for the same dump through
- * the attach mechanism alone. No agent to
+ * <p>The attach API joins the target process and the JDK's {@code jcmd} asks
+ * it for the dump through the attach mechanism alone - nothing is started in
+ * the process. Its management agent is used when it runs already, and started
+ * only where there is no {@code jcmd} (a JRE): an agent, once started, stays
+ * open in the process until it ends. No agent to
  * install, no tool outside the JDK, nothing that has to be prepared in advance -
  * which matters, because the whole point is to examine a process that was not
  * built with this in mind.
@@ -68,26 +66,50 @@ final class ProcessHeap {
                     properties.getProperty("java.version", "?")),
                     properties.getProperty("java.vm.vendor", "?"),
                     space < 0 ? command : command.substring(0, space));
-            try {
-                String address = startAgent(machine);
-                try (JMXConnector connector =
-                             JMXConnectorFactory.connect(new JMXServiceURL(address))) {
-                    MBeanServerConnection beans = connector.getMBeanServerConnection();
-                    HotSpotDiagnosticMXBean diagnostic = java.lang.management.ManagementFactory
-                            .newPlatformMXBeanProxy(beans,
-                                    "com.sun.management:type=HotSpotDiagnostic",
-                                    HotSpotDiagnosticMXBean.class);
-                    // live = false: whatever is merely waiting to be collected is in
-                    // the file too. That is the least forgiving setting and the only
-                    // honest one - an attacker gets exactly this file, and whether an
-                    // object in it was still reachable is of no interest to them.
-                    diagnostic.dumpHeap(target.toAbsolutePath().toString(), false);
+            // jcmd first: the attach mechanism alone, nothing started in the
+            // process. JMX only through an agent that runs already - starting
+            // one would leave an RMI connector open in the process for the rest
+            // of its life - or, without a JDK's jcmd, by starting it after all.
+            String running = machine.getAgentProperties()
+                    .getProperty("com.sun.management.jmxremote.localConnectorAddress");
+            if (running != null && !localConnector(running)) {
+                // The address is the examined process's to say, and JMX over
+                // RMI or JNDI to an address of its choosing is a door into
+                // this one. Only the local connector's own form is taken.
+                System.err.println("process " + pid + " names a management agent at an address "
+                        + "that is not a local connector - not used");
+                running = null;
+            }
+            IOException jcmdRefused = null;
+            if (running == null && jcmdPresent()) {
+                try {
+                    jcmd(pid, target);
+                    return jvm;
+                } catch (IOException refused) {
+                    jcmdRefused = refused;
                 }
+            }
+            try {
+                String address = running;
+                if (address == null) {
+                    System.err.println("starting the management agent of process " + pid
+                            + " for the dump" + (jcmdRefused == null ? " (no jcmd here)" : "")
+                            + " - it stays open in the process, on the local host, until "
+                            + "the process ends");
+                    address = machine.startLocalManagementAgent();
+                }
+                dumpThroughJmx(address, target);
             } catch (IOException | RuntimeException refused) {
-                // A process with a serialization filter that rejects what JMX
-                // sends over RMI - Helidon sets one that rejects everything - or
-                // whose management agent cannot start: the same dump through
-                // the attach mechanism's own command, without RMI.
+                if (jcmdRefused != null || !jcmdPresent()) {
+                    if (jcmdRefused != null) {
+                        refused.addSuppressed(jcmdRefused);
+                    }
+                    throw new IOException("process " + pid + " refused the heap dump"
+                            + (jcmdRefused != null ? " through jcmd (" + jcmdRefused.getMessage()
+                                    + ") and" : "") + " through JMX (" + refused + ")", refused);
+                }
+                // A running agent that refuses - a serialization filter that
+                // rejects what JMX sends over RMI, as Helidon's does.
                 try {
                     jcmd(pid, target);
                 } catch (IOException alsoRefused) {
@@ -104,6 +126,26 @@ final class ProcessHeap {
     }
 
     /**
+     * Whether {@code address} is what a local management agent publishes:
+     * {@code service:jmx:rmi://} to the loopback address, a stub and no
+     * {@code /jndi/} lookup.
+     */
+    static boolean localConnector(String address) {
+        try {
+            JMXServiceURL url = new JMXServiceURL(address);
+            String host = url.getHost();
+            // Literal forms only: a name would be looked up, and the name is
+            // the examined process's choice.
+            boolean loopback = host == null || host.isEmpty()
+                    || java.util.Set.of("127.0.0.1", "localhost", "::1", "[::1]").contains(host);
+            return "rmi".equals(url.getProtocol()) && loopback
+                    && !url.getURLPath().contains("/jndi/");
+        } catch (java.io.IOException | RuntimeException malformed) {
+            return false;
+        }
+    }
+
+    /**
      * {@code jcmd <pid> GC.heap_dump -all <target>}: the dump through the
      * attach mechanism's diagnostic command, with this JDK's {@code jcmd}.
      * {@code -all} is {@code live = false}: unreachable objects as well. What
@@ -114,9 +156,7 @@ final class ProcessHeap {
         if (!pid.matches("[0-9]{1,10}")) {
             throw new IOException("a process id is a number, not '" + pid + "'");
         }
-        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
-                .startsWith("windows");
-        Path jcmd = Path.of(System.getProperty("java.home"), "bin", windows ? "jcmd.exe" : "jcmd");
+        Path jcmd = jcmdPath();
         if (!java.nio.file.Files.isExecutable(jcmd)) {
             throw new IOException("no jcmd in " + jcmd.getParent() + " - this needs a JDK, not a JRE");
         }
@@ -151,19 +191,25 @@ final class ProcessHeap {
         }
     }
 
-    /**
-     * The management agent of the target process, started if need be.
-     *
-     * <p>Every JVM can start it on demand; it listens on a local address only
-     * and disappears with the process. Nothing is left behind, which is what
-     * makes this usable on a machine somebody else has to run afterwards.
-     */
-    private static String startAgent(VirtualMachine machine) throws IOException {
-        Properties agent = machine.getAgentProperties();
-        String address = agent.getProperty("com.sun.management.jmxremote.localConnectorAddress");
-        if (address != null) {
-            return address;
+    private static void dumpThroughJmx(String address, Path target) throws IOException {
+        try (JMXConnector connector = JMXConnectorFactory.connect(new JMXServiceURL(address))) {
+            MBeanServerConnection beans = connector.getMBeanServerConnection();
+            HotSpotDiagnosticMXBean diagnostic = java.lang.management.ManagementFactory
+                    .newPlatformMXBeanProxy(beans, "com.sun.management:type=HotSpotDiagnostic",
+                            HotSpotDiagnosticMXBean.class);
+            // live = false: whatever is merely waiting to be collected is in the
+            // file too - an attacker gets exactly this file.
+            diagnostic.dumpHeap(target.toAbsolutePath().toString(), false);
         }
-        return machine.startLocalManagementAgent();
+    }
+
+    private static Path jcmdPath() {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
+                .startsWith("windows");
+        return Path.of(System.getProperty("java.home"), "bin", windows ? "jcmd.exe" : "jcmd");
+    }
+
+    static boolean jcmdPresent() {
+        return java.nio.file.Files.isExecutable(jcmdPath());
     }
 }

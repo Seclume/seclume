@@ -149,7 +149,38 @@ class LoginFuzzTest {
         seeds.put("cleartext asked for", join(cleartext, error));
         seeds.put("refused before anything", error);
         seeds.put("accepted without asking", join(ok, parameter, backendKey, ready));
+        // A server that skips the login: ready with no AuthenticationOk at all,
+        // and ready in the middle of a SCRAM exchange.
+        seeds.put("ready before anything", join(parameter, backendKey, ready, ready));
+        seeds.put("ready in the middle of scram", join(sasl, saslContinue, ready));
         return seeds;
+    }
+
+    /**
+     * Whether {@code script} holds an AuthenticationOk before its first
+     * ReadyForQuery - read the way the driver reads it, message by message.
+     * A session that opened on a script without one was let in by a server
+     * that never said yes.
+     */
+    static boolean okBeforeReady(byte[] script) {
+        int i = 0;
+        while (i + 5 <= script.length) {
+            char type = (char) (script[i] & 0xff);
+            int length = ((script[i + 1] & 0xff) << 24) | ((script[i + 2] & 0xff) << 16)
+                    | ((script[i + 3] & 0xff) << 8) | (script[i + 4] & 0xff);
+            if (length < 4 || (long) i + 1 + length > script.length) {
+                return false;
+            }
+            if (type == 'R' && length >= 8 && i + 8 < script.length && script[i + 5] == 0 && script[i + 6] == 0
+                    && script[i + 7] == 0 && script[i + 8] == 0) {
+                return true;
+            }
+            if (type == 'Z') {
+                return false;
+            }
+            i += 1 + length;
+        }
+        return false;
     }
 
     /**
@@ -177,6 +208,10 @@ class LoginFuzzTest {
             try (PgSession session = PgSession.open(settings())) {
                 tally.merge(session.isOpen() ? "logged in" : "logged in but closed",
                         1, Integer::sum);
+                if (!okBeforeReady(script)) {
+                    breaches.put(name, "a session opened on a script with no "
+                            + "AuthenticationOk before its ReadyForQuery");
+                }
             } catch (SQLException refused) {
                 tally.merge(refused.getClass().getSimpleName(), 1, Integer::sum);
             } catch (Throwable thrown) {

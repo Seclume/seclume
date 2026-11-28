@@ -59,7 +59,7 @@ class MySqlDifferentialTest {
             Assumptions.abort("no MySQL on " + HOST + ":" + PORT);
         }
         seclumeUrl = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/" + DATABASE
-                + "?user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
+                + "?tls=prefer&user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
                 + file.toString().replace('\\', '/');
         vendorUrl = "jdbc:mysql://" + HOST + ":" + PORT + "/" + DATABASE;
         password = Files.readString(file).trim();

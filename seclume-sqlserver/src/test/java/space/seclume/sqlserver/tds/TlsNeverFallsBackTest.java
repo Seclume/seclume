@@ -109,7 +109,8 @@ class TlsNeverFallsBackTest {
         int[] asked = new int[1];
         long open = SecretScope.open();
         try (ServerSocket listener = new ServerSocket(0, 4, InetAddress.getLoopbackAddress())) {
-            CompletableFuture<Seen> seen = serve(listener, behaviour, preLoginAnswer);
+            java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+            CompletableFuture<Seen> seen = serve(listener, behaviour, preLoginAnswer, done);
             SQLException failure = null;
             try {
                 TdsSession.Settings settings = settings(listener.getLocalPort(), version, stack,
@@ -122,6 +123,7 @@ class TlsNeverFallsBackTest {
             } catch (SQLException e) {
                 failure = e;
             }
+            done.countDown();
             Seen what = seen.get(60, TimeUnit.SECONDS);
             if (behaviour != null && hostile.lastPlaintext().length > 0) {
                 return "the client went on in the clear: " + hostile.lastPlaintext().length + " bytes";
@@ -178,7 +180,8 @@ class TlsNeverFallsBackTest {
     }
 
     private static CompletableFuture<Seen> serve(ServerSocket listener, Behaviour behaviour,
-                                                 int preLoginAnswer) {
+                                                 int preLoginAnswer,
+            java.util.concurrent.CountDownLatch done) {
         return CompletableFuture.supplyAsync(() -> {
             int connections = 0;
             int afterAnswer = 0;
@@ -208,7 +211,16 @@ class TlsNeverFallsBackTest {
                         clear.write(after);
                     }
                 }
-                listener.setSoTimeout(700);
+                // A second try happens inside open(), and its connection is in the
+                // backlog before open() returns: once the client is done, a short
+                // look finds it. Five seconds at most, so a retry that waits for
+                // its greeting is still let in and counted.
+                try {
+                    done.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                listener.setSoTimeout(100);
                 while (true) {
                     try (Socket again = listener.accept()) {
                         connections++;

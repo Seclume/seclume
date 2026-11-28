@@ -53,7 +53,12 @@ public final class ColumnRotation {
     public enum Context {
         /** Nothing: {@link EncryptedColumn#encrypt(java.lang.foreign.MemorySegment)}. */
         NONE,
-        /** The row's {@code id}, as its text in UTF-8 - a value copied into another row is refused there. */
+        /**
+         * The row's {@code id} - a value copied into another row is refused
+         * there. Encoded as {@link #rowIdContext}: binary ids as their bytes,
+         * decimals without trailing zeros, everything else as its text in
+         * UTF-8 - what the application binds when it writes.
+         */
         ROW_ID
     }
 
@@ -66,13 +71,30 @@ public final class ColumnRotation {
      * @param conflicts values that changed while they were being moved - left as the application wrote them
      * @param lastId    the {@code id} of the last row read: where a stopped run continues
      * @param done      whether the end of the table was reached
+     * @param unreadable values that did not open with the ring - tampered with, damaged, or
+     *                   under a key no longer in it - left as they are
+     * @param unreadableIds the row ids of the first {@value #IDS_KEPT} of them, to look at
      */
     public record Progress(long rows, long rotated, long current, long conflicts, Object lastId,
-            boolean done) {
+            boolean done, long unreadable, List<Object> unreadableIds) {
+
+        /** How many ids of unreadable rows a progress keeps. */
+        public static final int IDS_KEPT = 100;
+
+        public Progress {
+            unreadableIds = List.copyOf(unreadableIds);
+        }
 
         Progress plus(Progress batch) {
+            List<Object> ids = new ArrayList<>(unreadableIds);
+            for (Object one : batch.unreadableIds) {
+                if (ids.size() < IDS_KEPT) {
+                    ids.add(one);
+                }
+            }
             return new Progress(rows + batch.rows, rotated + batch.rotated, current + batch.current,
-                    conflicts + batch.conflicts, batch.lastId == null ? lastId : batch.lastId, batch.done);
+                    conflicts + batch.conflicts, batch.lastId == null ? lastId : batch.lastId,
+                    batch.done, unreadable + batch.unreadable, ids);
         }
     }
 
@@ -83,6 +105,32 @@ public final class ColumnRotation {
      * @param primary the ring's primary key
      */
     public record Census(Map<String, Map<Integer, Long>> keys, int primary) {
+
+        /**
+         * Before a key leaves the ring: refused while any value is still
+         * counted under it. Nothing stopped a key from being taken out with
+         * values under it, and those were lost for good.
+         *
+         * @throws IllegalStateException naming the columns that still hold values under it
+         */
+        public void requireNoneUnder(int key) {
+            List<String> holding = new ArrayList<>();
+            for (Map.Entry<String, Map<Integer, Long>> column : keys.entrySet()) {
+                Long count = column.getValue().get(key);
+                if (count != null && count > 0) {
+                    holding.add(column.getKey() + " (" + count + ")");
+                }
+            }
+            if (key == primary) {
+                throw new IllegalStateException("key " + key + " is the primary - make another "
+                        + "one primary and rotate first");
+            }
+            if (!holding.isEmpty()) {
+                throw new IllegalStateException("key " + key + " still has values under it in "
+                        + String.join(", ", holding) + " - rotate them first, or they are lost "
+                        + "with the key");
+            }
+        }
 
         /** Values under another key than the primary - what a rotation still has to do. */
         public long remaining() {
@@ -131,7 +179,7 @@ public final class ColumnRotation {
      * what it did. The connection's auto-commit is restored afterwards.
      */
     public Progress run(Connection connection) throws SQLException {
-        Progress total = new Progress(0, 0, 0, 0, after, false);
+        Progress total = new Progress(0, 0, 0, 0, after, false, 0, List.of());
         Object from = after;
         while (true) {
             Progress batch = step(connection, from);
@@ -201,6 +249,8 @@ public final class ColumnRotation {
         long rotated = 0;
         long current = 0;
         long conflicts = 0;
+        long unreadable = 0;
+        List<Object> unreadableIds = new ArrayList<>();
         for (int r = 0; r < ids.size(); r++) {
             Object rowId = ids.get(r);
             byte[][] row = values.get(r);
@@ -212,7 +262,18 @@ public final class ColumnRotation {
                 }
                 Column column = columns.get(c);
                 if (column.column().needsReencryption(row[c])) {
-                    fresh[c] = column.column().reencrypt(row[c], context(column, rowId));
+                    try {
+                        fresh[c] = column.column().reencrypt(row[c], context(column, rowId));
+                    } catch (FieldEncryptionException doesNotOpen) {
+                        // One value that does not open - tampered with, damaged,
+                        // under a key gone from the ring - stopped the whole
+                        // rotation. It is left as it is and counted, with its id.
+                        unreadable++;
+                        if (unreadableIds.size() < Progress.IDS_KEPT) { // mutation-equivalent: the batch is added to the run with Progress.plus, which keeps IDS_KEPT as well
+                            unreadableIds.add(rowId);
+                        }
+                        continue;
+                    }
                     changed.add(c);
                 } else {
                     current++;
@@ -246,12 +307,31 @@ public final class ColumnRotation {
             }
         }
         Object last = ids.isEmpty() ? after : ids.get(ids.size() - 1);
-        return new Progress(ids.size(), rotated, current, conflicts, last, ids.size() < batchSize);
+        return new Progress(ids.size(), rotated, current, conflicts, last, ids.size() < batchSize,
+                unreadable, unreadableIds);
     }
 
     private static byte[] context(Column column, Object rowId) {
         if (column.context() == Context.NONE) {
             return new byte[0];
+        }
+        return rowIdContext(rowId);
+    }
+
+    /**
+     * A row id as a context. String.valueOf made a byte[] id (RAW, BINARY, a
+     * UUID as bytes) its identity in memory - "[B@1a2b..." - and no value
+     * opened; a BigDecimal was 17 or 17.0 depending on the driver. Binary ids
+     * are their bytes, decimals are stripped of trailing zeros, and the rest
+     * is its text as before - so what was written keeps opening.
+     */
+    public static byte[] rowIdContext(Object rowId) {
+        if (rowId instanceof byte[] bytes) {
+            return bytes.clone();
+        }
+        if (rowId instanceof java.math.BigDecimal decimal) {
+            String plain = decimal.signum() == 0 ? "0" : decimal.stripTrailingZeros().toPlainString();
+            return plain.getBytes(StandardCharsets.UTF_8); // seclume-allow: a row id, not a secret
         }
         return String.valueOf(rowId).getBytes(StandardCharsets.UTF_8); // seclume-allow: a row id, not a secret
     }

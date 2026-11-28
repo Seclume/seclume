@@ -10,7 +10,7 @@
 #   .github/scripts/mongo_fixtures.sh <work directory>
 set -euo pipefail
 work=$(mkdir -p "${1:?usage: mongo_fixtures.sh <work directory>}" && cd "$1" && pwd)
-image=${MONGO_IMAGE:-docker.io/library/mongo:8.0}
+image=${MONGO_IMAGE:-docker.io/library/mongo:8.0@sha256:479e85ced54ffb8a40dade1dcde2da2a9ae858515b9415e9cc54bfb8f0575d01}
 # The image hands rseq to tcmalloc (glibc.pthread.rseq=0). On kernels 6.19 to
 # 7.0.13 that crashes, so mongod refuses to start there (SERVER-121912); with
 # glibc keeping rseq, tcmalloc does without it and mongod starts.

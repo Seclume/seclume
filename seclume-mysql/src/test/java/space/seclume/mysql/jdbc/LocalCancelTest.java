@@ -79,7 +79,7 @@ class LocalCancelTest {
             Assumptions.abort("no MySQL on " + HOST + ":" + PORT);
         }
         url = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test"
-                + "?user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
+                + "?tls=prefer&allowLegacyHashOverUnverifiedTls=true&user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

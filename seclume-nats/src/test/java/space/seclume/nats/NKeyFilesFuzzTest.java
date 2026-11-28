@@ -78,25 +78,31 @@ class NKeyFilesFuzzTest {
     void mutatedSeedAndCredsFilesAreReadOrRefused() throws Exception {
         List<byte[]> seeds = seeds();
         long seed = Long.getLong("seclume.nats.fuzz.seed", 0x5EC_4A75);
-        Random random = new Random(seed);
+        // Rounds side by side - where a mutation leaves the seed whole, every
+        // reader signs with it, and Ed25519 is most of the time. Each round
+        // has a random of its own, so it is the same round however they run.
+        java.util.stream.IntStream.range(0, ROUNDS).parallel()
+                .forEach(round -> mutateAndRead(seeds, seed, round));
+    }
+
+    private static void mutateAndRead(List<byte[]> seeds, long seed, int round) {
+        Random random = new Random(seed ^ (round * 0x9E3779B97F4A7C15L));
         String base32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567-\n ";
-        for (int round = 0; round < ROUNDS; round++) {
-            byte[] input = seeds.get(round % seeds.size()).clone();
-            for (int e = 1 + random.nextInt(4); e > 0 && input.length > 0; e--) {
-                int at = random.nextInt(input.length);
-                switch (random.nextInt(4)) {
-                    case 0 -> input[at] = (byte) random.nextInt(256);
-                    case 1 -> input[at] = (byte) base32.charAt(random.nextInt(base32.length()));
-                    case 2 -> input = Arrays.copyOf(input, at);
-                    default -> input[at] = (byte) (input[at] ^ (1 << random.nextInt(8)));
-                }
+        byte[] input = seeds.get(round % seeds.size()).clone();
+        for (int e = 1 + random.nextInt(4); e > 0 && input.length > 0; e--) {
+            int at = random.nextInt(input.length);
+            switch (random.nextInt(4)) {
+                case 0 -> input[at] = (byte) random.nextInt(256);
+                case 1 -> input[at] = (byte) base32.charAt(random.nextInt(base32.length()));
+                case 2 -> input = Arrays.copyOf(input, at);
+                default -> input[at] = (byte) (input[at] ^ (1 << random.nextInt(8)));
             }
-            try {
-                readAll(input);
-            } catch (AssertionError broken) {
-                throw new AssertionError("seed " + seed + " round " + round + ": "
-                        + broken.getMessage(), broken);
-            }
+        }
+        try {
+            readAll(input);
+        } catch (AssertionError broken) {
+            throw new AssertionError("seed " + seed + " round " + round + ": "
+                    + broken.getMessage(), broken);
         }
     }
 }

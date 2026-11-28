@@ -59,12 +59,13 @@ class LocalR2dbcPostgresTest {
         } catch (IOException e) {
             Assumptions.abort("no PostgreSQL on " + HOST + ":" + PORT);
         }
-        jdbcUrl = "jdbc:seclume:postgresql://seclume_test@" + HOST + ":" + PORT
-                + "/seclume_test?provider=file&path=" + password.toString().replace('\\', '/')
+        // A seclume JDBC URL names its user in user=, never before the host.
+        jdbcUrl = "jdbc:seclume:postgresql://" + HOST + ":" + PORT
+                + "/seclume_test?tls=prefer&user=seclume_test&provider=file&path=" + password.toString().replace('\\', '/')
                 + "&trustServerCertificate=true";
         factory = ConnectionFactories.get("r2dbc:seclume:postgresql://seclume_test@" + HOST + ":"
-                + PORT + "/seclume_test?provider=file&path="
-                + password.toString().replace('\\', '/') + "&options=trustServerCertificate%3Dtrue");
+                + PORT + "/seclume_test?tls=prefer&provider=file&path="
+                + password.toString().replace('\\', '/') + "&trustServerCertificate=true");
         run("drop table if exists zl_r2dbc");
         run("create table zl_r2dbc (id serial primary key, name text, n int)");
     }
@@ -215,6 +216,57 @@ class LocalR2dbcPostgresTest {
             }
             assertEquals(caller, lentOn[0], "a ready connection was not lent on the subscriber's thread");
             assertTrue(name == null || !name.equals("tenant-a"), "the last borrower's setting survived: " + name);
+        }
+    }
+
+    /**
+     * setStatementTimeout and setLockWaitTimeout answered success and set
+     * nothing: the application believed it had a bound. A statement over its
+     * timeout is cancelled now, and the lock timeout is the session's.
+     */
+    @Test
+    void theTimeoutsAreSetAndHold() {
+        Connection connection = Mono.from(factory.create()).block(WAIT);
+        try {
+            Mono.from(connection.setLockWaitTimeout(Duration.ofMillis(1500))).block(WAIT);
+            String lockTimeout = Flux.from(connection.createStatement("show lock_timeout").execute())
+                    .concatMap(r -> r.map((row, meta) -> row.get(0, String.class))).blockFirst(WAIT);
+            assertEquals("1500ms", lockTimeout);
+            Mono.from(connection.setStatementTimeout(Duration.ofSeconds(1))).block(WAIT);
+            long started = System.nanoTime();
+            assertThrows(Exception.class, () -> Flux.from(connection
+                    .createStatement("select pg_sleep(5)").execute())
+                    .concatMap(r -> r.getRowsUpdated()).blockLast(WAIT));
+            long took = (System.nanoTime() - started) / 1_000_000;
+            assertTrue(took < 4500, "the statement ran " + took + " ms past a one-second timeout");
+        } finally {
+            Mono.from(connection.close()).block(WAIT);
+        }
+    }
+
+    /**
+     * A borrow cancelled while it waited for a connection - a client that hung
+     * up - got the connection once one was free, and Reactor discarded it
+     * unclosed: IN_USE for good. maximumPoolSize such cancels emptied the
+     * pool. The late connection is closed - given back - now.
+     */
+    @Test
+    void aBorrowCancelledWhileWaitingGivesItsConnectionBack() throws Exception {
+        space.seclume.pool.PoolSettings settings = new space.seclume.pool.PoolSettings();
+        settings.setMaximumPoolSize(1);
+        settings.setMinimumIdle(0);
+        settings.setConnectionTimeout(Duration.ofSeconds(10));
+        try (space.seclume.pool.SeclumePool pool = new space.seclume.pool.SeclumePool(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(jdbcUrl), settings)) {
+            ConnectionFactory pooled = SeclumeConnectionFactory.over(pool, "postgresql");
+            Connection held = Mono.from(pooled.create()).block(WAIT);
+            reactor.core.Disposable waiting = Mono.from(pooled.create()).subscribe();
+            Thread.sleep(300);                                // waiting for the one connection
+            waiting.dispose();                                // the client hangs up
+            Mono.from(held.close()).block(WAIT);              // the connection comes free
+            Thread.sleep(500);                                // the cancelled borrow takes it
+            Connection next = Mono.from(pooled.create()).block(Duration.ofSeconds(8));
+            Mono.from(next.close()).block(WAIT);
         }
     }
 

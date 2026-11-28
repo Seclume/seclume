@@ -33,7 +33,7 @@ public final class JsonOff {
     static final int MAX_DEPTH = 512;
 
     /** Thrown when the document is malformed or the path is not in it. */
-    public static final class NotFound extends RuntimeException {
+    public static class NotFound extends RuntimeException {
 
         private static final long serialVersionUID = 1L;
 
@@ -142,7 +142,39 @@ public final class JsonOff {
         return literal.equals("true");
     }
 
-    /** Whether the path exists at all - for an optional field. */
+    /** A field that the document - read to its end without fault - does not have. */
+    public static final class Absent extends NotFound {
+        private static final long serialVersionUID = 1L;
+
+        public Absent(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Whether the field is there - false only where the object it would stand
+     * in ends without it. A document that cannot be read so far (a missing
+     * comma, nesting deeper than {@link #MAX_DEPTH}, an array instead of an
+     * object, a string with a control character) is a {@link NotFound},
+     * not an absence: for a check that applies a claim only when it is
+     * present - exp, nbf, crit - an absence read out of a broken document is
+     * a check skipped.
+     */
+    public static boolean present(MemorySegment json, int length, String... path) {
+        try {
+            new Cursor(json, length).walk(path);
+            return true;
+        } catch (Absent absent) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether the path can be read - for an optional field whose absence
+     * changes nothing. Not for a check: a document broken in front of the
+     * field reads as false here, and a check that applies a claim only when
+     * it is there skips it. Checks ask {@link #present}.
+     */
     public static boolean has(MemorySegment json, int length, String... path) {
         try {
             new Cursor(json, length).walk(path);
@@ -176,7 +208,7 @@ public final class JsonOff {
                 }
                 next();
                 if (!findField(field)) {
-                    throw new NotFound("the answer has no field '" + field + "'");
+                    throw new Absent("the answer has no field '" + field + "'");
                 }
             }
         }
@@ -202,7 +234,7 @@ public final class JsonOff {
                 skipValue();
                 skipWhitespace();
                 if (!hasMore()) {
-                    return false;
+                    throw new NotFound("the answer ended inside an object");
                 }
                 if (peek() == ',') {
                     next();

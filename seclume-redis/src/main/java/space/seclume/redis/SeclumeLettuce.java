@@ -143,13 +143,24 @@ public final class SeclumeLettuce {
      * own - shut down with it by {@link RedisClusterClient#shutdown()}.
      * Every seed and every cluster node discovered on topology refresh or
      * redirect has its certificate checked against its own host name or IP
-     * address and receives the password from native memory.
+     * address. The password goes from native memory to the URL's hosts and to
+     * those {@code cluster-hosts=} allows; a node discovery names beyond them
+     * gets the placeholder.
      */
     public static RedisClusterClient clusterClient(String url) {
         RedisUrl parsed = RedisUrl.parse(url);
         if (parsed.sentinelMasterId() != null) {
             throw new IllegalArgumentException("sentinelMasterId is for Redis Sentinel with "
                     + "SeclumeLettuce.client(url), not SeclumeLettuce.clusterClient(url)");
+        }
+        if (!parsed.tls() && !parsed.allowPlainDiscovery()) {
+            // The nodes come from CLUSTER SLOTS and MOVED: over plain redis://
+            // whoever is on the way names them, and with no certificate to
+            // check, the application's data goes where they say. The password
+            // stays with the listed hosts either way.
+            throw new IllegalArgumentException("a Redis Cluster over plain redis:// learns its "
+                    + "nodes from answers anybody on the way can write - use rediss://, or say "
+                    + "allow-plain-discovery=true where the network is trusted");
         }
         String placeholder = RespPasswordRewriter.newPlaceholder();
         ClientResources resources = DefaultClientResources.builder()
@@ -206,6 +217,28 @@ public final class SeclumeLettuce {
                 : uri.withAuthentication(url.user(), placeholder.toCharArray())).build();
     }
 
+    /**
+     * What a connection to {@code host:port} rewrites. One to a Sentinel
+     * knows the Sentinel's placeholder only, one to a data node the data
+     * node's only: either placeholder written into the other's AUTH slot -
+     * the application led to it - sent that password to the wrong server.
+     */
+    static RespPasswordRewriter rewriterFor(RedisUrl url, String placeholder,
+                                            String sentinelPlaceholder, String host, int port,
+                                            boolean allowed) {
+        boolean toSentinel = url.sentinelMasterId() != null && url.isListedNode(host, port);
+        return new RespPasswordRewriter(
+                allowed && !toSentinel ? placeholder : NOT_HERE, url.secret(), url.user(),
+                allowed && toSentinel ? sentinelPlaceholder : null,
+                allowed && toSentinel ? url.sentinelSecret() : null,
+                url.sentinelUser(), host + ":" + port);
+    }
+
+    private static final System.Logger LOG = System.getLogger(SeclumeLettuce.class.getName());
+
+    /** Matches no placeholder: a node not allowed has nothing rewritten. */
+    private static final String NOT_HERE = "seclume-redis: no password for this node";
+
     private static NettyCustomizer customizer(RedisUrl url, String placeholder,
                                               String sentinelPlaceholder) {
         return new NettyCustomizer() {
@@ -218,10 +251,17 @@ public final class SeclumeLettuce {
                             throws Exception {
                         String host = hostOf(remoteAddress, url);
                         int port = portOf(remoteAddress, url);
-                        RespPasswordRewriter rewriter = new RespPasswordRewriter(
-                                placeholder, url.secret(),
-                                sentinelPlaceholder, url.sentinelSecret(),
-                                host + ":" + port);
+                        // A node discovery named and nobody allowed gets the
+                        // placeholders as they are - no secret is written for it.
+                        boolean allowed = url.mayReceive(host);
+                        if (!allowed) {
+                            LOG.log(System.Logger.Level.WARNING, "seclume: the Redis node "
+                                    + host + ":" + port + " was named by discovery and is not "
+                                    + "among the URL's hosts or cluster-hosts/master-hosts - it "
+                                    + "gets no password");
+                        }
+                        RespPasswordRewriter rewriter = rewriterFor(url, placeholder,
+                                sentinelPlaceholder, host, port, allowed);
                         if (url.tls()) {
                             SslHandler tls = new SslHandler(new SeclumeSslEngine(
                                     host, port, url.trust(), rewriter));

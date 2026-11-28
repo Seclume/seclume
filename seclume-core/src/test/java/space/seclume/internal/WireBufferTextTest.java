@@ -2,9 +2,11 @@ package space.seclume.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -89,6 +91,21 @@ class WireBufferTextTest {
                 written[i] = buffer.getByte(i);
             }
             assertArrayEquals(expected, written);
+        }
+    }
+
+    /**
+     * A zero inside a NUL-terminated field ended it early, and the rest was
+     * read as the next field of the message. Refused, with nothing written.
+     */
+    @Test
+    void aZeroInsideACStringIsRefusedAndNothingWritten() {
+        try (WireBuffer buffer = new WireBuffer(8)) {
+            buffer.putByte((byte) 'Q');
+            int before = buffer.position();
+            assertThrows(IllegalArgumentException.class,
+                    () -> buffer.putCString("select 1\u0000; drop table t"));
+            assertEquals(before, buffer.position(), "a part of the field was written");
         }
     }
 }

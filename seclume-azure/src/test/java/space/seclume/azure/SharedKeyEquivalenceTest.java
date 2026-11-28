@@ -58,7 +58,30 @@ class SharedKeyEquivalenceTest {
                                 "2025-11-05", "Content-MD5", "1B2M2Y8AsgTpgAmY7PhCfg==",
                                 "Content-Language", "de", "Content-Encoding", "gzip",
                                 "If-Modified-Since", "Sat, 26 Sep 2026 12:00:00 GMT",
-                                "Content-Length", "120")));
+                                "Content-Length", "120")),
+                // Names whose code point order is not the service's: a hyphen
+                // counts for little in it, an underscore sorts before a digit.
+                new Case("PUT", "https://acct.blob.core.windows.net/c/b?comp=metadata"
+                        + "&x_a=1&x-a=2&xa=3&x1=4", Map.of("x-ms-date",
+                        "Sun, 27 Sep 2026 12:00:00 GMT", "x-ms-version", "2025-11-05",
+                        "x-ms-meta-a-b", "1", "x-ms-meta-a_b", "2", "x-ms-meta-a1", "3",
+                        "x-ms-meta-ab", "4", "x-ms-meta-A2", "5", "x-ms-meta-a", "6",
+                        "Content-Length", "0")));
+    }
+
+    /** A value with a line break has no one canonical form: it is not signed. */
+    @Test
+    void aHeaderWithALineBreakIsNotSigned() throws Exception {
+        Path key = directory.resolve("key");
+        Files.writeString(key, "c2VjbHVtZQ==");
+        SeclumeSharedKeyPolicy ours = new SeclumeSharedKeyPolicy("acct",
+                SecretProviders.of(Map.of("provider", "file", "path", key.toString())));
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaderName.fromString("x-ms-date"), "Sun, 27 Sep 2026 12:00:00 GMT");
+        headers.set(HttpHeaderName.fromString("x-ms-meta-note"), "a\r\nx-ms-version: 1");
+        URL url = URI.create("https://acct.blob.core.windows.net/c/b").toURL();
+        assertThrows(IllegalArgumentException.class,
+                () -> ours.authorization(url, "PUT", headers, "0"));
     }
 
     @Test

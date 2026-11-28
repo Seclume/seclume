@@ -153,4 +153,19 @@ class PgArrayTextTest {
             assertEquals(List.of("1=alpha", "2=beta"), read);
         }
     }
+
+    /**
+     * {{{{... was a StackOverflowError out of getArray(); PostgreSQL writes
+     * no array of more than six dimensions.
+     */
+    @org.junit.jupiter.api.Test
+    void moreThanSixDimensionsAreRefused() throws java.sql.SQLException {
+        java.sql.SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                java.sql.SQLException.class,
+                () -> PgArrayText.parse("{".repeat(7) + "1" + "}".repeat(7), ','));
+        org.junit.jupiter.api.Assertions.assertEquals("22P02", refused.getSQLState());
+        org.junit.jupiter.api.Assertions.assertThrows(java.sql.SQLException.class,
+                () -> PgArrayText.parse("{".repeat(200_000), ','));
+        PgArrayText.parse("{".repeat(6) + "1" + "}".repeat(6), ',');       // six: read
+    }
 }

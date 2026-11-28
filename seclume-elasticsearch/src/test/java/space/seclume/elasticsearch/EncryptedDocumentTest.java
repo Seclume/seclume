@@ -23,7 +23,7 @@ import space.seclume.secret.SecretProvider;
 /** Documents with encrypted fields: the rest untouched, deterministic fields found, a rotation searched. */
 class EncryptedDocumentTest {
 
-    private static SecretProvider key(int seed) {
+    static SecretProvider key(int seed) {
         return new SecretProvider() {
             @Override
             public int writeSecret(MemorySegment target) {
@@ -43,6 +43,29 @@ class EncryptedDocumentTest {
     private static EncryptedDocument patients(FieldKeys keys) {
         return EncryptedDocument.of(keys, "patients").field("ssn", Mode.DETERMINISTIC)
                 .field("diagnosis", Mode.RANDOMIZED);
+    }
+
+    /**
+     * A randomized field copied into the same field of another document
+     * opened there. Written with its document's id, it opens only with it; a
+     * deterministic field stays searchable across documents.
+     */
+    @Test
+    void aFieldWrittenWithItsIdOpensInNoOtherDocument() {
+        try (FieldKeys keys = FieldKeys.builder().key(1, key(1)).build()) {
+            Map<String, Object> document = new HashMap<>();
+            document.put("ssn", "123-45-6789");
+            document.put("diagnosis", "zl-search-canary");
+            Map<String, Object> stored = patients(keys).encrypt("p-1", document);
+            assertEquals(document, patients(keys).decrypt("p-1", stored));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> patients(keys).decrypt("p-2", stored));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> patients(keys).decrypt(stored));
+            assertEquals(patients(keys).searchTerms("ssn", "123-45-6789").get(0), stored.get("ssn"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> patients(keys).encrypt("", document));
+        }
     }
 
     @Test

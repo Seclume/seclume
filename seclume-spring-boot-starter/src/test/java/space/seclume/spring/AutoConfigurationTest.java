@@ -51,7 +51,7 @@ class AutoConfigurationTest {
 
     /** Where the live PostgreSQL is - see TestHosts, never a literal here. */
     private static final String POSTGRES_URL = "jdbc:seclume:postgresql://"
-            + TestHosts.postgres() + ":" + TestHosts.postgresPort() + "/seclume_test";
+            + TestHosts.postgres() + ":" + TestHosts.postgresPort() + "/seclume_test?tls=prefer";
 
     private static Path passwordFile;
 

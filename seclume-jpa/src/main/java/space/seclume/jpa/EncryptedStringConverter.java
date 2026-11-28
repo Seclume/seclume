@@ -53,6 +53,13 @@ import space.seclume.field.FieldKeys;
  * converts the parameter as it converts the attribute. While a rotation is
  * under way, only values under the primary key are found that way; see
  * {@link EncryptedColumn#searchSealed}.
+ *
+ * <p><b>A value is not bound to its row:</b> a converter is not told which
+ * entity it converts, so it encrypts without a context. Whoever can write to
+ * the table can copy a value from one row into another of the same column,
+ * and it is read there as that row's own. Where that matters - an account to
+ * pay to, a role - seal the value with the row's id instead
+ * ({@link space.seclume.field.EncryptedColumn#seal(java.lang.foreign.MemorySegment, byte[])}).
  */
 public abstract class EncryptedStringConverter implements AttributeConverter<String, byte[]> {
 

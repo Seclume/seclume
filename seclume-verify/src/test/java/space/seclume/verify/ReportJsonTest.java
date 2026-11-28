@@ -25,6 +25,22 @@ import space.seclume.internal.JsonOff;
  */
 class ReportJsonTest {
 
+    /**
+     * Much of the text report is what the server said - and a terminal shows
+     * it: an ESC there drove the terminal, a CR overwrote the line before.
+     * In the text they are escaped; the JSON keeps the value as it was.
+     */
+    @Test
+    void whatTheServerSaidCannotDriveTheTerminal() {
+        Report report = new Report();
+        report.title("seclume-verify");
+        report.line("server", "PostgreSQL 17\u001b[2J\rforged line");
+        String text = report.toString();
+        org.junit.jupiter.api.Assertions.assertFalse(text.contains("\u001b"), text);
+        org.junit.jupiter.api.Assertions.assertFalse(text.contains("\r"), text);
+        org.junit.jupiter.api.Assertions.assertTrue(text.contains("\\x1b[2J\\x0dforged line"), text);
+    }
+
     /** The shape a probe depends on: the flag, the code, the sections. */
     @Test
     void theDocumentSaysWhetherItStandsAndWhy() {

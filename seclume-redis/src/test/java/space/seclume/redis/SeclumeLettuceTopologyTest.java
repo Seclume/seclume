@@ -117,6 +117,7 @@ class SeclumeLettuceTopologyTest {
 
             String url = "rediss://localhost:" + node1.port()
                     + "?user=orders&tlsRootCert=" + slash(caPem)
+                    + "&cluster-hosts=127.0.0.1"
                     + "&provider=file&path=" + slash(redisSecretFile);
             RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
             try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
@@ -143,7 +144,14 @@ class SeclumeLettuceTopologyTest {
 
             String url = "redis://localhost:" + node1.port() + ",127.0.0.1:" + node2.port()
                     + "?user=orders&provider=file&path=" + slash(redisSecretFile);
-            RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
+            // Over plain redis:// the nodes come from answers anybody on the
+            // way can write: refused unless the URL says the network is trusted.
+            IllegalArgumentException plain = org.junit.jupiter.api.Assertions.assertThrows(
+                    IllegalArgumentException.class, () -> SeclumeLettuce.clusterClient(url));
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    plain.getMessage().contains("allow-plain-discovery"), plain.getMessage());
+            RedisClusterClient cluster = SeclumeLettuce.clusterClient(
+                    url + "&allow-plain-discovery=true");
             try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
                 assertEquals("OK", conn.sync().set("b", "plain-1"));
                 assertEquals("OK", conn.sync().set("a", "plain-2"));
@@ -154,6 +162,65 @@ class SeclumeLettuceTopologyTest {
             }
         }
         java.util.Arrays.fill(expectedPw, (byte) 0);
+    }
+
+    /**
+     * The cluster names a second node - in CLUSTER SLOTS, in a -MOVED - that
+     * is neither the URL's host nor in cluster-hosts: it never gets the
+     * password, whatever the key that lands on it.
+     */
+    @Test
+    void aClusterNodeTheUrlDoesNotAllowGetsNoPassword() throws Exception {
+        byte[] expectedPw = readTrimmedBytes(redisSecretFile);
+        try (FakeRedisNode node1 = FakeRedisNode.clusterNode(localhostTls, "orders", expectedPw);
+             FakeRedisNode node2 = FakeRedisNode.clusterNode(loopbackTls, "orders", expectedPw)) {
+            node1.setClusterPeers("localhost", node1.port(), "127.0.0.1", node2.port());
+            node2.setClusterPeers("localhost", node1.port(), "127.0.0.1", node2.port());
+            String url = "rediss://localhost:" + node1.port()
+                    + "?user=orders&tlsRootCert=" + slash(caPem)
+                    + "&provider=file&path=" + slash(redisSecretFile);
+            RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
+            try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
+                assertEquals("OK", conn.sync().set("b", "on-first-shard"));
+                // "a" lands on the node the cluster named: no login there.
+                assertThrows(Exception.class, () -> conn.sync().set("a", "on-second-shard"));
+            } finally {
+                cluster.shutdown();
+            }
+            assertTrue(node1.authenticatedCount.get() >= 1, "the URL's node got no login");
+            assertEquals(0, node2.authenticatedCount.get(),
+                    "the node only the cluster named got the password");
+        } finally {
+            java.util.Arrays.fill(expectedPw, (byte) 0);
+        }
+    }
+
+    /**
+     * A node that discovery names - a forged -MOVED, a Sentinel answer - and
+     * that neither the URL nor cluster-hosts allows gets the placeholder, not
+     * the password: its login fails, and the password never left for it.
+     */
+    @Test
+    void aDiscoveredNodeNobodyAllowedGetsNoPassword() throws Exception {
+        byte[] expectedPw = readTrimmedBytes(redisSecretFile);
+        try (FakeRedisNode master = FakeRedisNode.standaloneNode(loopbackTls, "orders", expectedPw);
+             FakeRedisNode sentinel = FakeRedisNode.sentinelNode(
+                     localhostTls, "orders", expectedPw, "mymaster", "127.0.0.1", master.port())) {
+            String url = "rediss-sentinel://localhost:" + sentinel.port()
+                    + "?sentinelMasterId=mymaster&sentinelAuth=true"
+                    + "&user=orders&provider=file&path=" + slash(redisSecretFile)
+                    + "&tlsRootCert=" + slash(caPem);
+            RedisClient client = SeclumeLettuce.client(url);
+            try {
+                assertThrows(Exception.class, () -> client.connect().close());
+            } finally {
+                client.shutdown();
+            }
+            assertEquals(0, master.authenticatedCount.get(),
+                    "the master the Sentinel named got the password");
+        } finally {
+            java.util.Arrays.fill(expectedPw, (byte) 0);
+        }
     }
 
     @Test
@@ -195,7 +262,7 @@ class SeclumeLettuceTopologyTest {
              FakeRedisNode sentinel = FakeRedisNode.sentinelNode(
                      localhostTls, "guard", sentinelPw, "mymaster", "127.0.0.1", master.port())) {
             String url = "rediss-sentinel://localhost:" + sentinel.port()
-                    + "?sentinelMasterId=mymaster"
+                    + "?sentinelMasterId=mymaster&master-hosts=127.0.0.1"
                     + "&user=orders&provider=file&path=" + slash(redisSecretFile)
                     + "&sentinelUser=guard&sentinel-provider=file&sentinel-path="
                     + slash(sentinelSecretFile)

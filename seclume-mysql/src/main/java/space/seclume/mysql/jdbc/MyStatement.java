@@ -109,7 +109,10 @@ class MyStatement implements Statement, MySession.RowHandler {
      */
     final void underDeadline(String sql, Work body) throws SQLException {
         try (space.seclume.internal.jdbc.Deadline deadline =
-                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow)) {
+                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow,
+                             // A server that ignores the cancellation and trickles
+                             // a byte now and then: closed after the grace.
+                             () -> connection.session().transport().close())) {
             try {
                 body.run();
             } catch (SQLException failed) {
@@ -634,9 +637,10 @@ class MyStatement implements Statement, MySession.RowHandler {
     }
 
     /** The text as the server has to see it. */
-    final String escaped(String sql) {
+    final String escaped(String sql) throws SQLException {
         return escapeProcessing ? space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
-                space.seclume.internal.jdbc.JdbcEscapes.Dialect.MYSQL) : sql;
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.MYSQL,
+                !connection.session().noBackslashEscapes()) : sql;
     }
 
     @Override
@@ -806,7 +810,9 @@ class MyStatement implements Statement, MySession.RowHandler {
 
     @Override
     public String enquoteNCharLiteral(String value) throws SQLException {
-        return "N" + enquoteLiteral(value);
+        String literal = enquoteLiteral(value);
+        // _utf8mb4 X'..' (MyQuoting.hex) is national already; N_utf8mb4 is no SQL.
+        return literal.startsWith("'") ? "N" + literal : literal;
     }
 
     @Override

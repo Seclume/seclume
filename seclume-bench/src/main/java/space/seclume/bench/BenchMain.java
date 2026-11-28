@@ -58,7 +58,8 @@ public final class BenchMain {
     }
 
     /**
-     * Passes the {@code bench.*} settings on to the forked JVMs.
+     * Passes the {@code bench.*} settings - and {@code seclume.secret.providers} -
+     * on to the forked JVMs.
      *
      * <p>JMH measures in a JVM of its own, and that one does <b>not</b> inherit
      * the system properties of the launcher. Without this, every measurement
@@ -70,7 +71,9 @@ public final class BenchMain {
     private static String[] withBenchProperties(String[] args) {
         StringBuilder forwarded = new StringBuilder();
         for (String name : System.getProperties().stringPropertyNames()) {
-            if (name.startsWith("bench.")) {
+            // And which providers may read this machine: the Mongo benchmark's URL
+            // names its password file.
+            if (name.startsWith("bench.") || name.equals("seclume.secret.providers")) {
                 if (!forwarded.isEmpty()) {
                     forwarded.append(' ');
                 }

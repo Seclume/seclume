@@ -33,9 +33,9 @@ class TdsDecoderFuzzTest {
 
     private static final int HEADER = 8;
     private static final int TYPE_TABULAR_RESULT = 0x04;
-    private static final int END_OF_MESSAGE = 0x01;
+    static final int END_OF_MESSAGE = 0x01;
 
-    private static byte[] packet(int status, byte[] payload) {
+    static byte[] packet(int status, byte[] payload) {
         int length = HEADER + payload.length;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TYPE_TABULAR_RESULT);
@@ -50,7 +50,7 @@ class TdsDecoderFuzzTest {
         return out.toByteArray();
     }
 
-    private static byte[] join(byte[]... parts) {
+    static byte[] join(byte[]... parts) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] part : parts) {
             out.writeBytes(part);
@@ -65,7 +65,7 @@ class TdsDecoderFuzzTest {
     }
 
     /** COLMETADATA for one INTN column. */
-    private static byte[] intColumn() {
+    static byte[] intColumn() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(0x81);                       // COLMETADATA
         out.write(0x01);
@@ -83,7 +83,7 @@ class TdsDecoderFuzzTest {
     }
 
     /** COLMETADATA for one NVARCHAR column. */
-    private static byte[] textColumn() {
+    static byte[] textColumn() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(0x81);
         out.write(0x01);
@@ -106,7 +106,7 @@ class TdsDecoderFuzzTest {
         return out.toByteArray();
     }
 
-    private static byte[] intRow(int value) {
+    static byte[] intRow(int value) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(0xd1);                       // ROW
         out.write(0x04);                       // this value is four bytes
@@ -117,7 +117,7 @@ class TdsDecoderFuzzTest {
         return out.toByteArray();
     }
 
-    private static byte[] textRow(String value) {
+    static byte[] textRow(String value) {
         byte[] utf16 = value.getBytes(StandardCharsets.UTF_16LE);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(0xd1);
@@ -127,11 +127,11 @@ class TdsDecoderFuzzTest {
         return out.toByteArray();
     }
 
-    private static byte[] nullRow() {
+    static byte[] nullRow() {
         return new byte[] {(byte) 0xd1, 0x00};
     }
 
-    private static byte[] done(int rows) {
+    static byte[] done(int rows) {
         return new byte[] {(byte) 0xfd, 0x10, 0x00, 0x00, 0x00,
             (byte) rows, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     }

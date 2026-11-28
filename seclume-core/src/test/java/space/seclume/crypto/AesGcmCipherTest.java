@@ -2,6 +2,7 @@ package space.seclume.crypto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -155,6 +156,53 @@ class AesGcmCipherTest {
                     () -> cipher.decrypt(nonce, 0, dummy, 0, 0, dummy, 0, -1L, dummy, 0));
             assertThrows(IllegalArgumentException.class,
                     () -> cipher.decrypt(nonce, 0, dummy, 0, 0, dummy, 0, tooLarge, dummy, 0));
+        }
+    }
+
+    /**
+     * A close from another thread freed the native context under an encrypt
+     * still using it - a use after free in the memory of the key schedule.
+     * Closed while four threads encrypt: every call either finishes or is
+     * refused as closed, and nothing else happens.
+     */
+    @Test
+    void aCloseDuringEncryptionIsSafe() throws Exception {
+        for (int round = 0; round < 20; round++) {
+            try (Arena arena = Arena.ofShared()) {
+                AesGcmCipher cipher = AesGcmCipher.of(arena.allocate(16), 0, 16);
+                java.util.concurrent.atomic.AtomicReference<Throwable> wrong =
+                        new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.CountDownLatch going = new java.util.concurrent.CountDownLatch(4);
+                java.util.List<Thread> threads = new java.util.ArrayList<>();
+                for (int t = 0; t < 4; t++) {
+                    threads.add(Thread.ofPlatform().start(() -> {
+                        MemorySegment nonce = arena.allocate(AesGcm.NONCE);
+                        MemorySegment in = arena.allocate(4096);
+                        MemorySegment out = arena.allocate(4096 + AesGcm.TAG);
+                        going.countDown();
+                        for (int i = 0; i < 2000; i++) {
+                            try {
+                                cipher.encrypt(nonce, 0, in, 0, 0, in, 0, 4096, out, 0);
+                            } catch (IllegalStateException closed) {
+                                if (!String.valueOf(closed.getMessage()).contains("closed")) {
+                                    wrong.compareAndSet(null, closed);
+                                }
+                                return;
+                            } catch (Throwable other) {
+                                wrong.compareAndSet(null, other);
+                                return;
+                            }
+                        }
+                    }));
+                }
+                going.await();
+                Thread.sleep(1);
+                cipher.close();
+                for (Thread thread : threads) {
+                    thread.join();
+                }
+                assertNull(wrong.get(), "a call during the close failed otherwise: " + wrong.get());
+            }
         }
     }
 

@@ -38,7 +38,7 @@ class CapacityTest {
                         + ":1433/master?user=sa&trustServerCertificate=true",
                         ".local-mssql-password", true),
                 new Target("Oracle", "jdbc:seclume:oracle://" + host
-                        + ":1521/FREEPDB1?user=seclume_test", ".local-oracle-password", false));
+                        + ":1521/FREEPDB1?tls=off&user=seclume_test", ".local-oracle-password", false));
     }
 
     @ParameterizedTest(name = "{0}")

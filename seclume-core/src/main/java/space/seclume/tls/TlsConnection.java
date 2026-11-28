@@ -51,6 +51,17 @@ public final class TlsConnection implements Transport {
     private static final int NEW_SESSION_TICKET = Handshake.NEW_SESSION_TICKET;
     private static final int KEY_UPDATE = 24;
 
+    /**
+     * Records sent under one key before this side changes it on its own. RFC
+     * 8446 section 5.5 puts AES-GCM's limit at 2^24.5 full records; the peer
+     * was the only one to ask for a new key, and one that never did let the
+     * client go past it. TLS 1.2 has no KeyUpdate.
+     */
+    static final long KEY_UPDATE_AFTER = 1L << 24;
+
+    /** {@link #KEY_UPDATE_AFTER}, per connection - a test lowers it for its own one. */
+    private long keyUpdateAfter = KEY_UPDATE_AFTER;
+
     /** Not final: see {@link #replaceTransport}. */
     private Transport underlying;
     private final RecordStream records;
@@ -115,6 +126,7 @@ public final class TlsConnection implements Transport {
         // A post-handshake message is small; a peer announcing a huge one is
         // not doing anything this connection needs to buffer.
         this.postHandshake = new HandshakeReassembler(1 << 16);
+        space.seclume.internal.LiveTls.opened(this);
     }
 
     /** Set by the handshake when it sent a client certificate. */
@@ -224,6 +236,13 @@ public final class TlsConnection implements Transport {
         int total = from.remaining();
         while (from.hasRemaining()) {
             int chunk = Math.min(from.remaining(), RecordStream.MAX_PLAINTEXT);
+            RecordProtection sending = records.writeProtection();
+            if (sending.sequence() >= keyUpdateAfter) {
+                if (sending.isTls12()) {
+                    tls12KeyWornOut("sent");
+                }
+                answerKeyUpdate();                  // a KeyUpdate of our own, not requesting one
+            }
             try {
                 records.write(RecordProtection.APPLICATION_DATA, MemorySegment.ofBuffer(from), 0,
                         chunk);
@@ -239,8 +258,25 @@ public final class TlsConnection implements Transport {
         return total;
     }
 
+    /**
+     * TLS 1.2 cannot change its key: no KeyUpdate, and renegotiation is not
+     * spoken. Past AES-GCM's limit for one key the connection is closed - the
+     * pool opens a new one, with new keys - rather than go on beyond what the
+     * cipher's bounds cover.
+     */
+    private void tls12KeyWornOut(String direction) throws IOException {
+        abort(TlsAlertException.CLOSE_NOTIFY);
+        throw new IOException("this TLS 1.2 connection has " + direction + " " + keyUpdateAfter
+                + " records under one key - AES-GCM's limit - and TLS 1.2 cannot change it: "
+                + "the connection is closed, a new one gets new keys");
+    }
+
     /** Reads one record and either keeps it for the caller or acts on it here. */
     private void receive() throws IOException {
+        RecordProtection reading = records.readProtection();
+        if (reading.isTls12() && reading.sequence() >= keyUpdateAfter) { // mutation-equivalent: one record either side of 2^24 is well inside AES-GCM's bound
+            tls12KeyWornOut("received");
+        }
         RecordStream.Incoming record;
         try {
             record = records.next();
@@ -770,6 +806,7 @@ public final class TlsConnection implements Transport {
             return;
         }
         released = true;
+        space.seclume.internal.LiveTls.released(this);
         postHandshake.close();
         records.close();
         arena.close();

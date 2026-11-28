@@ -52,6 +52,21 @@ Keep credentials and traffic secrets out of Java heap objects. Use the existing
 secret-handling APIs, keep bounds checks and cleanup intact, and do not add a
 runtime dependency to a driver without discussing the effect on its design.
 
+Every artifact and plugin the build downloads is checked in CI against its
+SHA-256 in `.mvn/checksums`. After changing a dependency or plugin, run
+`.github/scripts/record-checksums.sh` (add `-Prelease` or another profile if
+you changed something only that one uses) and commit the new lines. Review
+them as you would code: each one is a file the project now trusts. An existing
+entry that no longer matches fails the build; it is never replaced by the
+script.
+
+`.mvn/maven.config` sets `aether.checksums.algorithms=SHA-1,MD5` so that a
+release bundle stays under Maven Central's file limit. The same setting picks
+the repository checksum a download is compared with. That comparison guards
+against a broken transfer, not against the repository: whoever controls it
+serves the checksum too, in any algorithm. What guards against the repository is
+the SHA-256 lock above, which does not depend on this setting.
+
 For cryptographic changes, identify the protocol or algorithm specification,
 the interoperability requirements, and the test vectors used. Preserve peer
 authentication and fail-closed behavior. Check [TLS.md](TLS.md) and

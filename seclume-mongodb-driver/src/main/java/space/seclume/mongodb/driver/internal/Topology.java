@@ -119,6 +119,10 @@ public final class Topology implements AutoCloseable {
     private Kind kind;
     private String setName;
     private String srv;
+    /** The hosts of the seeds, lower case: who may announce whom. */
+    private final List<String> seedHosts;
+    /** Members announced but outside the seeds' domains, said once each. */
+    private final Set<String> refusedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private Srv.Resolver resolver;
     private long nextScan;
     private Integer maxSetVersion;
@@ -170,6 +174,11 @@ public final class Topology implements AutoCloseable {
                         && options.isDirectConnection() == null);
         this.kind = Boolean.TRUE.equals(options.isLoadBalanced()) ? Kind.LOAD_BALANCED
                 : direct ? Kind.SINGLE : setName != null ? Kind.REPLICA_SET : Kind.UNKNOWN;
+        List<String> seeds = new ArrayList<>();
+        for (String host : options.getHosts()) {
+            seeds.add(new ServerAddress(host).getHost().toLowerCase(java.util.Locale.ROOT));
+        }
+        this.seedHosts = List.copyOf(seeds);
         for (String host : options.getHosts()) {
             ServerAddress address = new ServerAddress(host);
             Server server = new Server(pool(address));
@@ -259,7 +268,7 @@ public final class Topology implements AutoCloseable {
      * replica set is followed by its own member lists instead.
      */
     private void rescan() {
-        if (srv == null || System.nanoTime() < nextScan
+        if (srv == null || nextScan - System.nanoTime() > 0
                 || (kind != Kind.SHARDED && kind != Kind.UNKNOWN)) {
             return;
         }
@@ -535,18 +544,38 @@ public final class Topology implements AutoCloseable {
         return false;
     }
 
-    private static Set<ServerAddress> members(ServerDescription description) {
+    private Set<ServerAddress> members(ServerDescription description) {
         Set<ServerAddress> members = new HashSet<>();
-        for (String host : description.getHosts()) {
-            members.add(new ServerAddress(host));
-        }
-        for (String host : description.getPassives()) {
-            members.add(new ServerAddress(host));
-        }
-        for (String host : description.getArbiters()) {
-            members.add(new ServerAddress(host));
+        List<String> all = new ArrayList<>(description.getHosts());
+        all.addAll(description.getPassives());
+        all.addAll(description.getArbiters());
+        for (String host : all) {
+            ServerAddress address = new ServerAddress(host);
+            if (mayJoin(address.getHost(), seedHosts, EXTRA_ALLOWED)) {
+                members.add(address);
+            } else if (refusedMembers.add(host)) {
+                LOG.log(System.Logger.Level.WARNING, "seclume: a member announced " + host
+                        + ", outside the domains of the seeds " + seedHosts + " - no connection "
+                        + "and no credential goes there. -Dseclume.mongodb.allowedHosts=<suffix> "
+                        + "where it belongs.");
+            }
         }
         return members;
+    }
+
+    /** Further host suffixes members may have - see MemberHosts. */
+    static final List<String> EXTRA_ALLOWED =
+            space.seclume.mongodb.internal.MemberHosts.EXTRA_ALLOWED;
+
+    private static final System.Logger LOG = System.getLogger(Topology.class.getName());
+
+    /**
+     * Whether an announced member gets a connection, and a credential with
+     * it - the rule seclume-mongodb applies to every socket as well; see
+     * {@link space.seclume.mongodb.internal.MemberHosts}.
+     */
+    static boolean mayJoin(String host, List<String> seeds, List<String> extra) {
+        return space.seclume.mongodb.internal.MemberHosts.mayJoin(host, seeds, extra);
     }
 
     private void remove(Server server) {
@@ -582,7 +611,24 @@ public final class Topology implements AutoCloseable {
                 .exception(error).build();
     }
 
+    /**
+     * A replica set has at most 50 members. A server naming more - in hosts,
+     * passives and arbiters together - would have a pool and a monitor opened
+     * for each, as many as it likes; its answer is taken for a broken one.
+     */
+    static final int MAX_MEMBERS = 50;
+
     static ServerDescription describe(ServerAddress address, BsonDocument hello, long rttNanos) {
+        int named = 0;
+        for (String field : new String[] {"hosts", "passives", "arbiters"}) {
+            if (hello.containsKey(field) && hello.get(field).isArray()) {
+                named += hello.getArray(field).size();
+            }
+        }
+        if (named > MAX_MEMBERS) {
+            return unknown(address, new com.mongodb.MongoClientException("the server names "
+                    + named + " replica set members; a replica set has at most " + MAX_MEMBERS));
+        }
         ServerType type;
         if ("isdbgrid".equals(hello.getString("msg", new BsonString("")).getValue())) {
             type = ServerType.SHARD_ROUTER;

@@ -23,10 +23,21 @@ import space.seclume.field.FieldEncryptionException;
  *
  * <pre>
  * EncryptedColumn ssn = keys.column("patients.ssn", Mode.DETERMINISTIC);
- * patients.insertOne(new Document("_id", 7).append("ssn", EncryptedFields.encrypt(ssn, number)));
+ * // Bound to the document: copied into another one, it does not open there.
+ * EncryptedColumn diagnosis = keys.column("patients.diagnosis", Mode.RANDOMIZED,
+ *         Context.REQUIRED);
+ * byte[] id = "7".getBytes(StandardCharsets.UTF_8);
+ * patients.insertOne(new Document("_id", 7)
+ *         .append("ssn", EncryptedFields.encrypt(ssn, number))
+ *         .append("diagnosis", EncryptedFields.encrypt(diagnosis, text, id)));
  * Document found = patients.find(EncryptedFields.eq("ssn", ssn, number)).first();
- * value.length(EncryptedFields.readInto(found, "ssn", ssn, value.segment()));
+ * value.length(EncryptedFields.readInto(found, "diagnosis", diagnosis, id, value.segment()));
  * </pre>
+ *
+ * <p>A deterministic field is searched across documents, so it takes no
+ * context; a randomized one is bound to its document's {@code _id} with one,
+ * and a column made with {@link EncryptedColumn.Context#REQUIRED} refuses a
+ * value written or read without it.
  *
  * <p>Not MongoDB's own client-side field level encryption: that needs
  * libmongocrypt, keeps its keys in a key vault collection and holds them as

@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Inputs the build fetches by name, not by content, that are not pinned yet.",
+    "pinned_inputs.py --check fails on one that is not listed here, and on one listed",
+    "here that is pinned by now: this list only shrinks. --pin pins the images."
+  ],
+  "unpinned": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "input": "${{matrix.image}}"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "input": "docker.io/library/mongo:${{matrix.version}}"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "input": "mcr.microsoft.com/mssql/server:${{matrix.version}}-latest"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "input": "postgres:${{matrix.version}}"
+    }
+  ]
+}

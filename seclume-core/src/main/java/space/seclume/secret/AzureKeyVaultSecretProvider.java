@@ -114,10 +114,11 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
             }
             answer.length(response.bodyLength());
 
-            expiresAt = JsonOff.has(answer.segment(), answer.length(), "attributes", "exp")
+            Instant exp = JsonOff.present(answer.segment(), answer.length(), "attributes", "exp")
                     ? Instant.ofEpochSecond(
                             JsonOff.number(answer.segment(), answer.length(), "attributes", "exp"))
                     : null;
+            expiresAt = stillMeant(exp, name);
             return JsonOff.string(answer.segment(), answer.length(), target, "value");
         } catch (IOException e) {
             throw new SecretUnavailableException(
@@ -127,6 +128,35 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
                     "Azure Key Vault answered, but not in a shape this understands: "
                     + e.getMessage(), e);
         }
+    }
+
+    /** The secrets whose past expiry was said already, with the expiry: once each. */
+    private static final java.util.Set<String> PAST_EXPIRY_SAID =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Key Vault does not enforce a secret's exp - the value is still handed
+     * out, and an exp in the past is often a reminder nobody acted on. Taken
+     * as the end of the credential, it made the pool see every connection as
+     * expired: a new login for every borrow. A past exp is no end; it is said.
+     */
+    static Instant stillMeant(Instant exp, String name) {
+        if (exp == null || exp.isAfter(Instant.now())) {
+            return exp;
+        }
+        // Once per secret and expiry: every login fetches the secret again, and
+        // a warning per login said the same thing a hundred times an hour.
+        if (PAST_EXPIRY_SAID.size() > 1000) {
+            PAST_EXPIRY_SAID.clear();
+        }
+        if (!PAST_EXPIRY_SAID.add(name + "@" + exp)) {
+            return null;
+        }
+        System.getLogger(AzureKeyVaultSecretProvider.class.getName()).log(
+                System.Logger.Level.WARNING, "seclume: the Key Vault secret " + name
+                + " expired at " + exp + " and is still handed out - taken as having no end. "
+                + "Rotate it, or move its expiry.");
+        return null;
     }
 
     @Override

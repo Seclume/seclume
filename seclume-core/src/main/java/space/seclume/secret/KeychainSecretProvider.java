@@ -180,6 +180,7 @@ public final class KeychainSecretProvider implements SecretProvider {
                         + status + " for service " + service);
             }
             MemorySegment data = result.get(ValueLayout.ADDRESS, 0);
+            MemorySegment held = MemorySegment.NULL;
             try {
                 long size = (long) DATA_LENGTH.invokeExact(data);
                 if (size <= 0) {
@@ -191,9 +192,16 @@ public final class KeychainSecretProvider implements SecretProvider {
                             + service + " is longer than the configured " + maxLength + " bytes");
                 }
                 MemorySegment bytes = (MemorySegment) DATA_BYTES.invokeExact(data);
-                MemorySegment.copy(bytes.reinterpret(size), 0, target, 0, size);
+                held = bytes.reinterpret(size);
+                MemorySegment.copy(held, 0, target, 0, size);
                 return (int) size;
             } finally {
+                // The CFData is ours alone (copied out of the keychain for this
+                // call): its bytes are zeroed before CoreFoundation frees them,
+                // or the password stays in the freed memory until reused.
+                if (!held.equals(MemorySegment.NULL)) {
+                    held.fill((byte) 0);
+                }
                 RELEASE.invokeExact(data);
             }
         } catch (SecretUnavailableException e) {

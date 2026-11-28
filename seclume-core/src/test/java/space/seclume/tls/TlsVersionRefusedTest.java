@@ -104,8 +104,8 @@ class TlsVersionRefusedTest {
                 socket -> socket.setEnabledProtocols(new String[] {"TLSv1.2"}));
                 Transport socket = SocketTransport.wrap(java.nio.channels.SocketChannel.open(
                         new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port())))) {
-            assertThrows(TlsVersionRefused.class, () -> ClientHandshake.connect(socket, HOSTNAME,
-                    null, null, null, ClientHello.Offer.TLS13).close());
+            assertThrows(TlsVersionRefused.class, () -> ClientHandshake.connectWithoutAuthenticating(socket, HOSTNAME,
+                    null, null, ClientHello.Offer.TLS13).close());
         }
     }
 

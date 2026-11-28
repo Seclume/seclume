@@ -65,6 +65,17 @@ public final class OpenSslRandom {
     private OpenSslRandom() {
     }
 
+    private static final java.util.concurrent.atomic.AtomicLong REQUESTS =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * How often a reseed was asked for, OpenSSL there or not - for a test that
+     * has to see that a restore asks before it lets new secrets through.
+     */
+    public static long reseedsRequested() {
+        return REQUESTS.get();
+    }
+
     /** Whether there is an OpenSSL here whose generator can be reseeded. */
     public static boolean available() {
         return PRIMARY != null;
@@ -78,6 +89,7 @@ public final class OpenSslRandom {
      * @throws IllegalStateException if OpenSSL is present and refused
      */
     public static boolean reseed() {
+        REQUESTS.incrementAndGet();
         if (!available()) {
             return false;
         }

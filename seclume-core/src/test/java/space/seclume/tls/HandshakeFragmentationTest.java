@@ -181,6 +181,78 @@ class HandshakeFragmentationTest {
         }
     }
 
+    /**
+     * (T17, T17b) A TLS 1.2 record whose type was changed on the way: the
+     * ChangeCipherSpec sent as a handshake record (20 to 22), or the encrypted
+     * Finished after it sent as application data (22 to 23). Either way the
+     * record does not say what it carries, and the handshake is refused - not
+     * read as the type it claims to be.
+     */
+    @ParameterizedTest(name = "the {0} record retyped to {1}")
+    @CsvSource({"20, 22, false", "22, 23, true"})
+    void aTls12RecordWithAnotherTypeIsRefused(int from, int to, boolean afterCcs) throws Exception {
+        try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
+                .createServerSocket(0, 50, InetAddress.getLoopbackAddress());
+             ServerSocket proxy = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            listener.setEnabledProtocols(new String[] {"TLSv1.2"});
+            daemon(() -> echo(listener));
+            AtomicInteger retyped = new AtomicInteger();
+            daemon(() -> retype(proxy, listener.getLocalPort(), from, to, afterCcs, retyped));
+            SocketTransport transport = SocketTransport.connect("localhost",
+                    proxy.getLocalPort(), 5000);
+            org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () ->
+                    TlsLayers.start(TlsStack.SECLUME, transport, "localhost",
+                            proxy.getLocalPort(), false).close());
+            transport.close();
+            org.junit.jupiter.api.Assertions.assertEquals(1, retyped.get(),
+                    "no record was retyped, so this proves nothing");
+        }
+    }
+
+    /**
+     * Passes everything through, and changes the type of one server record:
+     * the first of type {@code from} - after the ChangeCipherSpec when
+     * {@code afterCcs} - becomes {@code to}.
+     */
+    private static void retype(ServerSocket proxy, int serverPort, int from, int to,
+                               boolean afterCcs, AtomicInteger retyped) {
+        while (!proxy.isClosed()) {
+            try {
+                Socket client = proxy.accept();
+                Socket server = new Socket(InetAddress.getLoopbackAddress(), serverPort);
+                daemon(() -> pump(client, server));
+                daemon(() -> {
+                    try (client; server;
+                         DataInputStream in = new DataInputStream(server.getInputStream())) {
+                        OutputStream out = client.getOutputStream();
+                        byte[] header = new byte[5];
+                        boolean ccsSeen = false;
+                        boolean done = false;
+                        while (true) {
+                            in.readFully(header);
+                            int length = ((header[3] & 0xff) << 8) | (header[4] & 0xff);
+                            byte[] body = new byte[length];
+                            in.readFully(body);
+                            if (!done && header[0] == from && (!afterCcs || ccsSeen)) {
+                                header[0] = (byte) to;
+                                done = true;
+                                retyped.incrementAndGet();
+                            }
+                            ccsSeen |= header[0] == 20;
+                            out.write(header);
+                            out.write(body);
+                            out.flush();
+                        }
+                    } catch (IOException gone) {
+                        // either side went
+                    }
+                });
+            } catch (IOException closed) {
+                return;
+            }
+        }
+    }
+
     private static void daemon(Runnable body) {
         Thread thread = new Thread(body);
         thread.setDaemon(true);

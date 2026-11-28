@@ -292,6 +292,13 @@ public final class TtcLob {
                 locatorAt = returned.locatorAt();
                 locatorLength = returned.locatorLength();
                 p = returned.end();
+                // The locator is copied and sent back later: one that reached
+                // past what arrived would carry an earlier message's bytes.
+                if (returned.end() > end) {
+                    throw WireBuffer.Truncated.outOfData("a returned locator of "
+                            + locatorLength + " bytes and its amount where "
+                            + (end - locatorAt) + " have arrived");
+                }
             } else {
                 break;
             }

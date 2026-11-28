@@ -213,7 +213,9 @@ transaction per batch. A value is written back only `where id = ? and column = <
 a row the application changed in the meantime is left as the application wrote it - under the
 primary key, since it writes with the same ring - and counted as a conflict. A value already
 under the primary key is not touched, so a second run writes nothing, and a stopped one continues
-from `Progress.lastId()` with `.after(lastId)`. `Context.ROW_ID` is for columns whose values are
+from `Progress.lastId()` with `.after(lastId)`. Before a key leaves the ring, `rotation.census(connection).requireNoneUnder(key)` refuses
+while any value is still counted under it - taken out, those values are lost for good.
+`Context.ROW_ID` is for columns whose values are
 bound to their row's id ([Context](#context-a-value-bound-to-its-row)). The columns must compare
 by value in a `where` - `bytea`, `varbinary`, `raw`, not an Oracle `BLOB`.
 
@@ -243,6 +245,12 @@ included - one subject's value never opens under another's key. `shred` deletes 
 and wipes the cached ring: the subject's values stay wherever they were copied - the table, its
 indexes, replicas, exports, logs - and open nothing ever again. Deterministic columns stay
 searchable within a subject.
+
+**Other instances find out within a minute.** `shred` wipes this instance's cached ring at once.
+Another instance of the application keeps the subject's ring it had cached until it is older
+than `seclume.subjectKeys.maxAgeSeconds` (60 s), and can still open the subject's values until
+then. Where erasure has to hold everywhere at the same moment, lower that age, or stop the
+other instances' work on the subject before shredding; nothing broadcasts a shred.
 
 **Backups.** A backup of the *key table* still holds the wrapped key, and the ring still opens
 it - so a restored backup brings a shredded subject back as long as the ring key that wrapped it
@@ -328,6 +336,17 @@ em.createQuery("from Patient where ssn = :ssn", Patient.class)
   only passes on - a token, a TOTP seed. The entity holds the ciphertext; `column.seal(...)`
   makes one from native memory and `column.open(sealed, target)` writes the plaintext into
   native memory. Nothing on the heap is ever the plaintext.
+- **A converted value is not bound to its row.** A converter is not told which entity it
+  converts, so `EncryptedStringConverter` and `EncryptedBytesConverter` encrypt without a
+  [context](#context-a-value-bound-to-its-row): whoever can write to the table - an
+  administrator, an SQL injection, a restored backup - can copy a value from one row into
+  another of the same column, and the application reads it there as that row's own. Someone
+  who enters their own bank account through the application and copies its ciphertext into
+  another customer's row has changed where that customer's payouts go, without reading or
+  forging anything. For a value whose place matters - an account to pay to, a role, an
+  address a password reset goes to - use a `Sealed` attribute sealed with the row's id,
+  `column.seal(value, id)` and `column.open(sealed, id, target)`, with an id the application
+  assigns before the row is written (a UUID); or the JDBC API with `Context.ROW_ID`.
 - A deterministic attribute is searched by `=` and `in`, also in derived queries
   (`findBySsn`). During a rotation that finds the values under the primary key; use
   `column.searchSealed(value)` with `in` on a `Sealed` attribute, or re-encrypt first.
@@ -419,9 +438,12 @@ The ring, the format and the rotation are the same; only what carries the cipher
 
 ```java
 // Kafka - seclume-kafka: the broker, its log segments and a mirror see ciphertext.
-new KafkaProducer<>(properties, new EncryptingSerializer<>(new StringSerializer(), keys, Mode.DETERMINISTIC),
+// KeyBinding hands the key's digest to the value's (de)serializer: a value is bound to its key.
+new KafkaProducer<>(properties,
+        KeyBinding.serializer(new EncryptingSerializer<>(new StringSerializer(), keys, Mode.DETERMINISTIC)),
         new EncryptingSerializer<>(new OrderSerializer(), keys, Mode.RANDOMIZED));
-new KafkaConsumer<>(properties, new DecryptingDeserializer<>(new StringDeserializer(), keys),
+new KafkaConsumer<>(properties,
+        KeyBinding.deserializer(new DecryptingDeserializer<>(new StringDeserializer(), keys)),
         new DecryptingDeserializer<>(new OrderDeserializer(), keys));
 
 // Redis through Lettuce - seclume-redis: the server, RDB, AOF and MONITOR see ciphertext.
@@ -437,14 +459,40 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 
 | | Column key | Bound to | Searchable |
 |---|---|---|---|
-| Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open | a deterministic key keeps its partition |
-| Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name | an encrypted key is found by `GET` again, not by a pattern |
-| Elasticsearch | `search.<index>.<field>` | index and field | a deterministic field by an exact `terms` query, through a rotation |
+| JDBC, R2DBC | the column's name | the column; the row only with a [context](#context-a-value-bound-to-its-row) (`Context.ROW_ID`, a tenant's id) | a deterministic column without a context, by equality |
+| JPA converter | the attribute's column | the column - never the row: a converter is not told its entity | a deterministic attribute, by equality |
+| MongoDB | the field's column | the column; the document only with a context passed to `encrypt` / `readInto` | `EncryptedFields.eq`, under every key of the ring |
+| Kafka | `kafka.<topic>.value` / `.key` | the topic and the record's key - a value copied to another topic, or under another key, does not open | a deterministic key keeps its partition; the key's (de)serializer wrapped in `KeyBinding` |
+| Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
+| Elasticsearch | `search.<index>.<field>` (`search:<length>:<index>.<field>` for an index with a dot) | index and field; the document too when written and read with its id (`encrypt(id, source)`, `decrypt(id, source)`) - randomized fields only | a deterministic field by an exact `terms` query, through a rotation |
 
 A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value that does not open
 with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),
-never a wrong value. Lettuce does not hand the key to the value codec, so a Redis value is not
-bound to its key; Elasticsearch values are bound to their field, not their document.
+never a wrong value. Elasticsearch values are bound to their field, and to their document only
+when it is written and read with its id.
+
+**Encrypted keys are equal across codecs of one name.** `withEncryptedKeys` encrypts a key
+deterministically, so that `GET` finds it again - and so the same key is the same ciphertext in
+every codec with that name. With several tenants in one Redis, give each its own name.
+
+**A search over old keys finds no value written with a context.** `searchTerms` and
+`EncryptedFields.eq` compute the terms without a context; a deterministic column whose values
+carry one (a tenant's id) is searched within that context by the application, not by them.
+
+**Kafka values are bound to their key.** Kafka does not show a value's serializer the record's
+key, so the key's serializer and deserializer are wrapped in `KeyBinding`: they hand the digest of
+the key's bytes - on the consumer, of the key actually received, whatever a header claims - to the
+value's, which binds the value to it. account-17's `credit 5000` put under account-99 by whoever
+can write to the broker is refused there (`RecordKeyBindingTest`). Without the wrapper a value is
+refused rather than written unbound; `seclume.kafka.bind-to-key=false` writes and reads values
+unbound, as before 0.15, and `seclume.kafka.read-unbound=true` accepts unbound values beside bound
+ones while a topic is migrated - it accepts what a broker moved, so only for the migration.
+
+**Within a name, Redis and JPA values can be swapped.** Lettuce does not hand the key to the value
+codec: whoever can write to Redis can put one key's value under another, as a JPA converter's value
+can be copied into another row. For Redis values where the key matters,
+`EncryptedCodec.encodeValueFor(key, value)` and `decodeValueFor(key, stored)` bind the value to its
+key, and it is refused under any other (`KeyBindingTest`).
 
 Tested on their own (`EncryptedRecordsTest`, `EncryptedCodecTest`, `EncryptedDocumentTest`: back as
 they went, never in the clear, other topic, name, index, field or ring refused, a rotation read
@@ -459,6 +507,21 @@ row's primary key, a tenant's id - is authenticated with the value but not store
 ciphertext copied into another row then fails there instead of turning up as that row's
 value. A deterministic value with a context is equal only within the same context, so a
 column that is searched across rows takes none.
+
+**A column that refuses a value without one.** Leaving the context out is allowed on a column,
+and a value written that way opens in every row. Where that must not happen, make the column
+with `keys.column("orders.note", Mode.RANDOMIZED, Context.REQUIRED)`: `encrypt`, `decrypt`,
+`seal`, `open`, `set`, `readInto` and `reencrypt` without a context (or with an empty one)
+throw `IllegalArgumentException`. The keys and the format are those of the same column without
+the rule, so a column can be switched to it without rewriting what it holds. The Kafka and
+Redis integrations use it: every value they write is bound to its topic or codec name.
+
+**What a context does not stop: replay.** A context binds a value to *where* it is, not to
+*when* it was written. An older ciphertext of the same row - from a backup, a log, a copy taken
+before an update - written back into that row opens there, and the row has its old value
+again. Neither the format nor the keys can tell; where a value must not go back, keep a version
+in the row (a counter, an `updated_at`) and put it into the context, so that an old ciphertext
+names an old version and fails, or detect the write-back in the application.
 
 ## What stays off the heap
 
@@ -476,7 +539,14 @@ must be found.
 ## What it does not hide, and does not do
 
 - **The length** of every value, to the byte, and whether it is NULL - SQL NULL is stored as
-  NULL.
+  NULL. A column made with a padding hides the length up to its padded size:
+  `keys.column("patients.diagnosis", Mode.RANDOMIZED, Context.OPTIONAL,
+  Padding.toMultipleOf(32))` writes every value of up to 28 bytes as 32, and
+  `Padding.toPowerOfTwo(16)` lets only the order of magnitude show, at less than twice the
+  size. The column needs room for the padded size plus the overhead. Padded and unpadded
+  values are read by every column. In a column that pads, `needsReencryption` is true for an
+  unpadded value, so a `ColumnRotation` pass pads what was written before. `plaintextLength`
+  is then the most a value holds; the length is what `decrypt` returns.
 - **Equality**, in deterministic columns.
 - **Access patterns**: which rows a query touches, how often.
 - **The application.** Whoever runs code in the application process can decrypt, as the
@@ -494,11 +564,13 @@ must be found.
 [ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ 32 commitment ][ ciphertext ][ 16 tag ]
 ```
 
-- **Flags:** bit 0 set for deterministic. No other bit is defined; a value with one set is
-  refused.
+- **Flags:** bit 0 set for deterministic, bit 1 set for a padded value. No other bit is
+  defined; a value with one set is refused.
+- **A padded value's plaintext:** its length as four bytes, big endian, the value, and zero
+  bytes up to the padded size - all of it encrypted, so only the padded size shows.
 - **Associated data:** the first six bytes, followed by the context if there is one.
 - **Column keys:** `HKDF-SHA-256(salt = "seclume field encryption v1", IKM = data key,
-  info = flag byte || 0x00 || UTF-8 column name)`, 64 bytes: the first 32 are the AES-GCM-SIV
+  info = mode flag (bit 0 alone) || 0x00 || UTF-8 column name)`, 64 bytes: the first 32 are the AES-GCM-SIV
   key, the last 32 the commitment key.
 - **Commitment:** `HMAC-SHA-256(commitment key, version || flags || key number || nonce)`,
   checked in constant time before anything is decrypted. AES-GCM-SIV, like every AEAD built on

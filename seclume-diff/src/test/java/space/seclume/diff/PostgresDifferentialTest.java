@@ -55,7 +55,7 @@ class PostgresDifferentialTest {
                 + TestHosts.postgres() + ":" + TestHosts.postgresPort());
 
         seclumeUrl = "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":"
-                + TestHosts.postgresPort() + "/" + DATABASE + "?user=" + USER
+                + TestHosts.postgresPort() + "/" + DATABASE + "?tls=prefer&user=" + USER
                 + "&provider=file&path=" + file.toString().replace('\\', '/');
         vendorUrl = "jdbc:postgresql://" + TestHosts.postgres() + ":"
                 + TestHosts.postgresPort() + "/" + DATABASE;

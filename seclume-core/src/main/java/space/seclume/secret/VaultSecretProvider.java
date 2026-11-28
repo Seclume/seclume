@@ -97,6 +97,16 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     /** Ten years. See {@link #refresh}. */
     static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
 
+    /**
+     * How long a KV secret is used before it is read again:
+     * {@code seclume.vault.kvMaxAgeSeconds} (60), at least one second. Read
+     * when it is needed - it was read once, when the class was loaded, so a
+     * setting made after that was ignored.
+     */
+    static java.time.Duration staticMaxAge() {
+        return java.time.Duration.ofSeconds(Math.max(1,
+                Long.getLong("seclume.vault.kvMaxAgeSeconds", 60)));
+    }
     /** The credential in hand, or {@code null} before the first fetch. */
     private SecretScope cached;
     private Instant fetchedAt;
@@ -109,6 +119,16 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private String username;
     /** Set when the user was handed out: the password read next is that user's, unchanged. */
     private boolean userHandedOut;
+    /**
+     * Which credential each thread was handed the user of. Two logins at a
+     * refresh: one took user U1, the other's currentUser() fetched U2 and P2,
+     * and the first then read P2 - a login that failed. The thread's own
+     * user's password is written, the one before kept for that.
+     */
+    private final ThreadLocal<Long> handedGeneration = new ThreadLocal<>();
+    private long generation;
+    private SecretScope previousCredential;
+    private long previousGeneration = -1;
     /**
      * With a {@link VaultLogin}: the login the credential in hand was fetched
      * under. Vault revokes a lease together with the token that created it,
@@ -168,6 +188,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             validUntil = null;
             wiped.close();
         }
+        if (previousCredential != null) {
+            previousCredential.close();
+            previousCredential = null;
+        }
     }
 
     @Override
@@ -179,6 +203,19 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     public synchronized int writeSecret(MemorySegment target) {
         if (closed) {
             throw new SecretUnavailableException("this Vault provider is closed");
+        }
+        Long mine = handedGeneration.get();
+        handedGeneration.remove();
+        if (mine != null && mine != generation && mine == previousGeneration
+                && previousCredential != null) {
+            // This thread's user is the one before: its password, not the new one.
+            int length = previousCredential.length();
+            if (length > target.byteSize()) {
+                throw new SecretUnavailableException("the secret from " + path + " is " + length
+                        + " bytes and does not fit into the " + target.byteSize() + " provided");
+            }
+            MemorySegment.copy(previousCredential.segment(), 0, target, 0, length);
+            return length;
         }
         if (cached == null || (dueForRefresh() && !userHandedOut)) {
             renewOrRefresh();
@@ -237,6 +274,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             renewOrRefresh();
         }
         userHandedOut = true;
+        handedGeneration.set(generation);
         return username;
     }
 
@@ -304,7 +342,11 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
      */
     private boolean dueForRefresh() {
         if (validUntil == null) {
-            return false;                       // no lease: a static secret does not go stale
+            // No lease: a KV secret. It does not expire, but it is rotated -
+            // a new version - and is read again after staticMaxAge(), or a
+            // rotation at the source is never taken up (nor seen by a watch).
+            return fetchedAt != null
+                    && !clock.instant().isBefore(fetchedAt.plus(staticMaxAge()));
         }
         if (tokenReplaced()) {
             return true;
@@ -355,7 +397,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 int length = extract(answer, fresh.segment());
                 fresh.length(length);
                 Instant now = clock.instant();
-                long lease = JsonOff.has(answer.segment(), answer.length(), "lease_duration")
+                long lease = JsonOff.present(answer.segment(), answer.length(), "lease_duration")
                         ? JsonOff.number(answer.segment(), answer.length(), "lease_duration")
                         : 0;
                 // A lease longer than this is not one Vault hands out (its
@@ -374,9 +416,13 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 // nests its fields one level deeper and names no user here.
                 username = text(answer, "data", "username");
                 tokenGeneration = login == null ? 0 : login.generation();
-                if (previous != null) {
-                    previous.close();           // the old credential is wiped, not dropped
+                if (previousCredential != null) {
+                    previousCredential.close();     // two back: wiped, not dropped
                 }
+                // The one before stays for a login that took its user already.
+                previousCredential = previous;
+                previousGeneration = generation;
+                generation++; // mutation-equivalent: generations are only compared for equality, and counting down tells them apart as well
             } catch (Throwable e) {
                 fresh.close();
                 throw e;
@@ -392,7 +438,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     /** A field that is no secret - a lease id, a user name - as text; null when absent or empty. */
     private static String text(SecretScope answer, String... field) {
-        if (!JsonOff.has(answer.segment(), answer.length(), field)) {
+        if (!JsonOff.present(answer.segment(), answer.length(), field)) {
             return null;
         }
         try (Arena arena = Arena.ofConfined()) {
@@ -409,7 +455,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     /** KV v2 nests the data one level deeper than everything else does. */
     private int extract(SecretScope answer, MemorySegment out) {
-        if (JsonOff.has(answer.segment(), answer.length(), "data", "data", field)) {
+        if (JsonOff.present(answer.segment(), answer.length(), "data", "data", field)) {
             return JsonOff.string(answer.segment(), answer.length(), out, "data", "data", field);
         }
         return JsonOff.string(answer.segment(), answer.length(), out, "data", field);
@@ -466,6 +512,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             if (cached != null) {
                 cached.close();
                 cached = null;
+            }
+            if (previousCredential != null) {
+                previousCredential.close();
+                previousCredential = null;
             }
         } finally {
             token.close();

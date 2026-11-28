@@ -51,14 +51,16 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void whateverIsEncryptedDecryptsToItselfAndToNothingElse() {
-        Random random = new Random(SEED);
-        for (int round = 0; round < ROUNDS; round++) {
+        // Rounds side by side, each with a random of its own - derived from
+        // the seed and the round, so a failing round is the same round
+        // however they are scheduled.
+        java.util.stream.IntStream.range(0, ROUNDS).parallel().forEach(round -> {
             try {
-                oneRound(random);
+                oneRound(new Random(SEED ^ (round * 0x9E3779B97F4A7C15L)));
             } catch (AssertionError | RuntimeException e) {
                 throw new AssertionError("round " + round + " of seed " + SEED + ": " + e, e);
             }
-        }
+        });
     }
 
     private static void oneRound(Random random) {
@@ -183,7 +185,7 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void aRandomizedColumnNeverRepeatsANonce() {
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32])) {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey())) {
             EncryptedColumn column = keys.column("t.c", Mode.RANDOMIZED);
             java.util.Set<String> nonces = new java.util.HashSet<>();
             for (int i = 0; i < 20_000; i++) {
@@ -197,7 +199,7 @@ class FieldEncryptionPropertyTest {
     @Test
     void anythingAtAllEndsInAValueOrAFieldEncryptionException() {
         Random random = new Random(SEED + 1);
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32]);
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey());
              SecretScope out = SecretScope.allocate(512)) {
             EncryptedColumn[] columns = {keys.column("t.c", Mode.RANDOMIZED),
                     keys.column("t.c", Mode.DETERMINISTIC)};
@@ -228,7 +230,7 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void aNullValueIsRefusedNotEncrypted() {
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32])) {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey())) {
             assertThrows(IllegalArgumentException.class,
                     () -> keys.column("t.c", Mode.RANDOMIZED).encrypt(null));
             assertThrows(FieldEncryptionException.class, () -> keys.column("t.c", Mode.RANDOMIZED)

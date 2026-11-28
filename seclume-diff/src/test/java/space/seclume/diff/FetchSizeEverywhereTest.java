@@ -59,7 +59,7 @@ class FetchSizeEverywhereTest {
                         ".local-mssql-password", "&trustServerCertificate=true",
                         "create table zl_fetch_writes (n int)"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "", "create table zl_fetch_writes (n number(10))"));
+                        ".local-oracle-password", "&tls=off", "create table zl_fetch_writes (n number(10))"));
     }
 
     @ParameterizedTest(name = "{0}")

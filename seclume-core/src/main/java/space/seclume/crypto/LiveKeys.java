@@ -20,10 +20,33 @@ final class LiveKeys {
 
     static void opened(Object key) {
         HELD.put(key, origin());
+        OPENED.put(key, Thread.currentThread().getName() + " at " + where());
     }
 
     static void closed(Object key) {
         HELD.remove(key);
+        OPENED.remove(key);
+    }
+
+    /**
+     * For a test that finds a key still held and has to say where it was
+     * made: the thread and the first calls outside this package. Class and
+     * method names only - nothing of the key - and never shown to a user,
+     * whose messages carry {@link #origins()}.
+     */
+    static List<String> details() {
+        return new ArrayList<>(OPENED.values());
+    }
+
+    private static final Map<Object, String> OPENED = new ConcurrentHashMap<>();
+
+    private static String where() {
+        return StackWalker.getInstance().walk(frames -> frames
+                .filter(f -> !f.getClassName().startsWith("space.seclume.crypto."))
+                .limit(8)
+                .map(f -> f.getClassName().substring(f.getClassName().lastIndexOf('.') + 1)
+                        + "." + f.getMethodName())
+                .collect(java.util.stream.Collectors.joining(" < ")));
     }
 
     static int count() {

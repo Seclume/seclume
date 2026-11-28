@@ -96,8 +96,21 @@ final class Policy {
         return file(Path.of(input), err);
     }
 
+    /**
+     * The largest CBOM read: far beyond any inventory, and short of what a
+     * file meant to exhaust the heap - handed to a pipeline from outside -
+     * could make the check read whole.
+     */
+    static final long MAX_CBOM_BYTES = 64L * 1024 * 1024;
+
     private static List<Asset> file(Path path, PrintStream err) {
         try {
+            long size = Files.size(path);
+            if (size > MAX_CBOM_BYTES) {
+                err.println(path + " is " + size + " bytes - more than the " + MAX_CBOM_BYTES
+                        + " a CBOM is read up to; nothing was read");
+                return null;
+            }
             // seclume-allow: a CBOM holds facts, never a secret
             return CbomReader.read(Files.readString(path));
         } catch (IOException | IllegalArgumentException e) {

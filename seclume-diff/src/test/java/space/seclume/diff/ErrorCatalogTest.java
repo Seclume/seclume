@@ -152,7 +152,7 @@ class ErrorCatalogTest {
         String drop = "begin execute immediate 'drop table %s purge'; "
                 + "exception when others then null; end;";
         compare(new Target("Oracle",
-                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?user=seclume_test",
+                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?tls=off&user=seclume_test",
                 "jdbc:oracle:thin:@//" + host + ":" + port + "/FREEPDB1", "seclume_test", secret,
                 List.of(String.format(drop, "zl_err_child"), String.format(drop, "zl_err"),
                         "create table zl_err (id number(10) primary key, name varchar2(5) "

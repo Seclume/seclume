@@ -105,6 +105,9 @@ class ProcessMemoryTest {
         List<String> command = new ArrayList<>(List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "--enable-native-access=ALL-UNNAMED",
+                // The probe reads its password with provider=file from the URL:
+                // allowed only where the JVM says so, as in the test JVM itself.
+                "-Dseclume.secret.providers=file",
                 "-cp", System.getProperty("java.class.path"),
                 ProcessMemoryProbe.class.getName(),
                 mode, HOST, Integer.toString(PORT), passwordFile.toString(),
