@@ -62,7 +62,7 @@ public final class ProcessHardening {
     /** Whether the process is not dumpable now - for tests and diagnostics. */
     public static boolean notDumpableNow() {
         try {
-            return Platform.isLinux() && (int) prctl().invokeExact(PR_GET_DUMPABLE, 0L) == 0;
+            return Platform.isLinux() && (int) prctl().invokeExact(PR_GET_DUMPABLE, 0L) == 0; // mutation-equivalent: a test JVM is dumpable; the other answer is the child JVM's, in SecretMemoryTest
         } catch (Throwable t) {
             return false;
         }

@@ -143,8 +143,20 @@ class SecretMemoryTest {
         }
         assertEquals(lentBefore, SecretMemory.lent());
         if (lentBefore == 0) {
+            assertTrue(secretMappings() > 0, "no secret mapping in /proc/self/maps");
             assertTrue(SecretMemory.releaseIdle() >= 2);
             assertEquals(0, SecretMemory.chunks(), "an idle chunk stayed mapped");
+            assertEquals(0, secretMappings(), "a chunk released stayed in /proc/self/maps");
+        }
+    }
+
+    /** The secret mappings the kernel lists for this process. */
+    private static long secretMappings() {
+        try {
+            return java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/maps"))
+                    .stream().filter(line -> line.contains("secretmem")).count();
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
     }
 
@@ -157,7 +169,6 @@ class SecretMemoryTest {
      */
     @Test
     void thePoolHandsOutBlocksThatNeverOverlap() {
-        Assumptions.assumeFalse(SecretMemory.inUse(), "the kernel's pages are tested above");
         SecretMemory.useForTests(length -> Arena.global().allocate(length, 4096).address());
         try {
             List<Arena> arenas = new ArrayList<>();
@@ -202,6 +213,245 @@ class SecretMemoryTest {
             }
         } finally {
             SecretMemory.useForTests(null);
+        }
+    }
+
+    /**
+     * Pages for the pool from one stretch of ordinary memory, one after the
+     * other - so that two chunks are neighbours, as mappings of the kernel's
+     * can be, and a block at a chunk's very end is told from the next one's
+     * first. Each request noted; fails while {@code full}.
+     */
+    private static final class Pages implements java.util.function.LongUnaryOperator {
+        final List<Long> lengths = new ArrayList<>();
+        final List<Long> bases = new ArrayList<>();
+        private final MemorySegment stretch = Arena.global().allocate(SecretMemory.CHUNK * 96, 4096);
+        private long used;
+        volatile boolean full;
+
+        @Override
+        public long applyAsLong(long length) {
+            if (full) {
+                return -12;                                   // ENOMEM: the memlock limit
+            }
+            lengths.add(length);
+            long base = stretch.address() + used;
+            used += length;
+            bases.add(base);
+            return base;
+        }
+    }
+
+    /**
+     * Small blocks come out of one chunk in a fixed order - the lower half of
+     * every split first - and as many as fit in a chunk need no second one.
+     */
+    @Test
+    void blocksComeOutOfAChunkInOrderAndFillIt() {
+        Pages pages = new Pages();
+        SecretMemory.useForTests(pages);
+        List<Arena> arenas = new ArrayList<>();
+        try {
+            assertEquals(0, SecretMemory.chunks(), "the pool did not start empty");
+            assertEquals(0, SecretMemory.lent());
+            long[] offsets = new long[5];
+            int[] sizes = {16, 16, 16, 16, 32};
+            for (int i = 0; i < sizes.length; i++) {
+                Arena arena = Arena.ofConfined();
+                arenas.add(arena);
+                offsets[i] = SecretMemory.allocate(sizes[i], arena).address() - pages.bases.get(0);
+            }
+            assertArrayEquals(new long[] {0, 16, 32, 48, 64}, offsets, "blocks out of order");
+            assertEquals(1, SecretMemory.chunks());
+            assertEquals(List.of(SecretMemory.CHUNK), pages.lengths);
+            assertEquals(5, SecretMemory.lent());
+            arenas.forEach(Arena::close);
+            arenas.clear();
+            assertEquals(0, SecretMemory.lent());
+            assertEquals(1, SecretMemory.releaseIdle());
+            assertEquals(0, SecretMemory.chunks());
+
+            // Sixty-four of 1 KiB fill one chunk exactly; the sixty-fifth needs a second.
+            for (int i = 0; i < 64; i++) {
+                Arena arena = Arena.ofConfined();
+                arenas.add(arena);
+                SecretMemory.allocate(1024, arena);
+            }
+            assertEquals(1, SecretMemory.chunks(), "64 KiB of 1 KiB blocks took more than a chunk");
+            Arena one = Arena.ofConfined();
+            arenas.add(one);
+            SecretMemory.allocate(1024, one);
+            assertEquals(2, SecretMemory.chunks());
+            // Every block of the first chunk back, one of the second still lent:
+            // only the first is released.
+            for (int i = 0; i < 64; i++) {
+                arenas.get(i).close();
+            }
+            assertEquals(1, SecretMemory.lent());
+            assertEquals(1, SecretMemory.releaseIdle(), "a chunk in use was released");
+            assertEquals(1, SecretMemory.chunks());
+            one.close();
+            assertEquals(1, SecretMemory.releaseIdle());
+        } finally {
+            for (Arena arena : arenas) {
+                if (arena.scope().isAlive()) {
+                    arena.close();
+                }
+            }
+            SecretMemory.useForTests(null);
+        }
+    }
+
+    /**
+     * A block given back is used again, and comes out wiped even when
+     * something wrote into it meanwhile; a secret larger than a chunk gets a
+     * mapping of whole chunks of its own, given back on close.
+     */
+    @Test
+    void aBlockIsReusedWipedAndALargeSecretMapsWholeChunks() {
+        Pages pages = new Pages();
+        SecretMemory.useForTests(pages);
+        try {
+            long address;
+            try (Arena arena = Arena.ofConfined()) {
+                address = SecretMemory.allocate(100, arena).address();
+            }
+            MemorySegment.ofAddress(address).reinterpret(128).fill((byte) 0x5a);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment again = SecretMemory.allocate(100, arena);
+                assertEquals(address, again.address(), "the free block was not used again");
+                assertArrayEquals(new byte[100], again.toArray(ValueLayout.JAVA_BYTE),
+                        "a block was handed out unwiped");
+            }
+            int chunks = SecretMemory.chunks();
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment large = SecretMemory.allocate(SecretMemory.CHUNK * 2 + 1, arena);
+                assertEquals(SecretMemory.CHUNK * 2 + 1, large.byteSize());
+                assertEquals(SecretMemory.CHUNK * 3, pages.lengths.get(pages.lengths.size() - 1),
+                        "not rounded up to whole chunks");
+                assertEquals(chunks, SecretMemory.chunks(), "a large secret counted as a chunk");
+                assertEquals(1, SecretMemory.lent());
+            }
+            assertEquals(0, SecretMemory.lent(), "the large mapping was not given back");
+            try (Arena arena = Arena.ofConfined()) {
+                int before = SecretMemory.chunks();
+                SecretMemory.allocate(SecretMemory.CHUNK, arena);
+                assertEquals(before + 1, SecretMemory.chunks(),
+                        "a secret of exactly a chunk is no large one: it takes a chunk");
+            }
+            try (Arena arena = Arena.ofConfined()) {
+                SecretMemory.allocate(SecretMemory.CHUNK * 2, arena);
+                assertEquals(SecretMemory.CHUNK * 2, pages.lengths.get(pages.lengths.size() - 1),
+                        "two chunks exactly were rounded up to three");
+            }
+        } finally {
+            SecretMemory.useForTests(null);
+        }
+    }
+
+    /**
+     * Two chunks side by side: releasing the first keeps the free block at the
+     * very start of the second - the next one handed out - and takes nothing
+     * of the second's.
+     */
+    @Test
+    void releasingAChunkKeepsItsNeighboursFreeBlocks() {
+        Pages pages = new Pages();
+        SecretMemory.useForTests(pages);
+        List<Arena> first = new ArrayList<>();
+        try {
+            for (int i = 0; i < 64; i++) {
+                Arena arena = Arena.ofConfined();
+                first.add(arena);
+                SecretMemory.allocate(1024, arena);
+            }
+            Arena start = Arena.ofConfined();
+            long atStart = SecretMemory.allocate(1024, start).address();
+            Arena next = Arena.ofConfined();
+            SecretMemory.allocate(1024, next);
+            assertEquals(2, SecretMemory.chunks());
+            assertEquals(pages.bases.get(1).longValue(), atStart, "the second chunk's first block");
+            assertEquals(pages.bases.get(0) + SecretMemory.CHUNK, atStart, "the chunks are not neighbours");
+            start.close();                                       // free, at the second chunk's start
+            first.forEach(Arena::close);
+            assertEquals(1, SecretMemory.releaseIdle());
+            assertEquals(1, SecretMemory.chunks());
+            try (Arena again = Arena.ofConfined()) {
+                assertEquals(atStart, SecretMemory.allocate(1024, again).address(),
+                        "the free block at the second chunk's start was lost with the first chunk");
+                assertEquals(1, SecretMemory.chunks());
+            }
+            next.close();
+        } finally {
+            SecretMemory.useForTests(null);
+        }
+    }
+
+    /** No room for another chunk: the secret goes where it went before, and nothing breaks. */
+    @Test
+    void withoutRoomForAChunkTheSecretGoesToLockedPages() {
+        Assumptions.assumeTrue(SecretMemory.MODE == SecretMemory.Mode.ON, "not the default here");
+        Pages pages = new Pages();
+        SecretMemory.useForTests(pages);
+        try {
+            pages.full = true;
+            try (Arena arena = Arena.ofConfined()) {
+                assertNull(SecretMemory.allocate(64, arena), "no chunk, yet a block");
+                assertNull(SecretMemory.allocate(SecretMemory.CHUNK + 1, arena));
+            }
+            assertEquals(0, SecretMemory.lent());
+        } finally {
+            SecretMemory.useForTests(null);
+        }
+    }
+
+    /** What is said for each errno. */
+    @Test
+    void eachRefusalIsNamed() {
+        assertTrue(SecretMemory.reason(38).contains("ENOSYS"));
+        assertTrue(SecretMemory.reason(12).contains("memlock"));
+        assertTrue(SecretMemory.reason(11).contains("memlock"));
+        assertTrue(SecretMemory.reason(1).contains("EPERM"));
+        assertTrue(SecretMemory.reason(100_000).contains("could not be called"));
+        assertTrue(SecretMemory.reason(5).contains("errno 5"));
+    }
+
+    /**
+     * Where the kernel offers them by default - Linux 6.5 on - they are in
+     * use: a test that only skips where they are not would not notice them
+     * switched off by mistake.
+     */
+    @Test
+    void onLinuxSixFiveTheyAreInUse() {
+        Assumptions.assumeTrue(Platform.isLinux(), "Linux only");
+        String[] version = System.getProperty("os.version").split("[.-]");
+        int major = Integer.parseInt(version[0]);
+        int minor = Integer.parseInt(version[1]);
+        Assumptions.assumeTrue(major > 6 || (major == 6 && minor >= 5), "before 6.5 a boot option");
+        Assumptions.assumeTrue(SecretMemory.MODE != SecretMemory.Mode.OFF, "opted out");
+        assertTrue(SecretMemory.inUse(), "Linux " + System.getProperty("os.version")
+                + " has secret pages, and they are not used: " + SecretMemory.unavailableBecause());
+        assertNull(SecretMemory.unavailableBecause());
+    }
+
+    /** Where they are in use, a secret scope's bytes lie in a secret mapping of this process. */
+    @Test
+    void aSecretScopeLivesInASecretMappingWhereTheyAreInUse() throws IOException {
+        Assumptions.assumeTrue(SecretMemory.inUse(), "no secret pages here: "
+                + SecretMemory.unavailableBecause());
+        try (SecretScope scope = SecretScope.allocate(64)) {
+            long address = scope.segment().address();
+            boolean inside = false;
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/maps"))) {
+                if (!line.contains("secretmem")) {
+                    continue;
+                }
+                String[] range = line.substring(0, line.indexOf(' ')).split("-");
+                long from = Long.parseUnsignedLong(range[0], 16);
+                long to = Long.parseUnsignedLong(range[1], 16);
+                inside |= address >= from && address < to;
+            }
+            assertTrue(inside, "a secret scope is not in a secret mapping");
         }
     }
 

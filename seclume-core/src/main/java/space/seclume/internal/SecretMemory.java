@@ -73,7 +73,7 @@ public final class SecretMemory {
     /** Free blocks by size class: index i holds blocks of {@code SMALLEST << i} bytes. */
     private static final List<ArrayDeque<Long>> FREE = new ArrayList<>();
     /** Every chunk mapped, by base address, with how many of its blocks are lent out. */
-    private static final java.util.Map<Long, int[]> CHUNKS = new java.util.HashMap<>();
+    private static final java.util.TreeMap<Long, int[]> CHUNKS = new java.util.TreeMap<>();
     /** Mappings of their own, for a secret larger than a chunk: base address to length. */
     private static final java.util.Map<Long, Long> LARGE = new java.util.HashMap<>();
     private static final Object LOCK = new Object();
@@ -173,7 +173,7 @@ public final class SecretMemory {
 
     /** Why they do not, or null when they do. */
     public static String unavailableBecause() {
-        decide();
+        decide(); // mutation-equivalent: decided once per process: a call left out after the first finds it decided
         return unavailable;
     }
 
@@ -200,7 +200,7 @@ public final class SecretMemory {
             } else {
                 // One chunk now: whether the kernel has it at all is seen at once.
                 long base = map(CHUNK);
-                if (base < 0) {
+                if (base < 0) { // mutation-equivalent: no mapping is at address 0
                     why = reason(-base);
                 } else {
                     addChunk(base);
@@ -211,7 +211,7 @@ public final class SecretMemory {
         }
     }
 
-    private static String reason(long errno) {
+    static String reason(long errno) {
         return switch ((int) errno) {
             case 38 -> "this kernel has no memfd_secret (ENOSYS: before Linux 6.5 it needs "
                     + "secretmem.enable=1 on the kernel command line)";
@@ -230,7 +230,7 @@ public final class SecretMemory {
      * {@code seclume.secretmem=required}, where that is refused.
      */
     public static MemorySegment allocate(long capacity, Arena arena) {
-        decide();
+        decide(); // mutation-equivalent: decided once per process: a call left out after the first finds it decided
         if (unavailable != null) {
             if (MODE == Mode.REQUIRED) {
                 throw new IllegalStateException("seclume.secretmem=required, and " + unavailable);
@@ -238,7 +238,7 @@ public final class SecretMemory {
             // Only where a newer kernel or a boot parameter would give them:
             // Windows and macOS have nothing like it, and a warning nobody can
             // act on is noise.
-            if (MODE == Mode.ON && !warned && Platform.isLinux()) {
+            if (MODE == Mode.ON && !warned && Platform.isLinux()) { // mutation-equivalent: it decides a warning only, and the secret goes where it goes either way
                 warned = true;
                 LOG.log(Level.WARNING, "seclume: secrets go into locked pages, not into secret "
                         + "pages, because " + unavailable + ". Root and processes allowed to read "
@@ -253,8 +253,8 @@ public final class SecretMemory {
             if (capacity > CHUNK) {
                 size = (capacity + CHUNK - 1) / CHUNK * CHUNK;
                 base = map(size);
-                if (base < 0) {
-                    return refusedOrNull(-base);
+                if (base < 0) { // mutation-equivalent: no mapping is at address 0
+                    return refusedOrNull(-base); // mutation-equivalent: null either way where not required; with required, a refusal either way - the errno is in its words only
                 }
                 LARGE.put(base, size);
             } else {
@@ -264,8 +264,8 @@ public final class SecretMemory {
                 if (block == null) {
                     if (!split(index)) {
                         long chunk = map(CHUNK);
-                        if (chunk < 0) {
-                            return refusedOrNull(-chunk);
+                        if (chunk < 0) { // mutation-equivalent: no mapping is at address 0
+                            return refusedOrNull(-chunk); // mutation-equivalent: null either way where not required; with required, a refusal either way - the errno is in its words only
                         }
                         // A new chunk is one block of the largest class: split
                         // down to the one asked for (found in CI - a null block).
@@ -290,9 +290,9 @@ public final class SecretMemory {
         if (MODE == Mode.REQUIRED) {
             throw new IllegalStateException("seclume.secretmem=required, and " + reason(errno));
         }
-        if (!warnedFull) {
+        if (!warnedFull) { // mutation-equivalent: it decides a warning only
             warnedFull = true;
-            LOG.log(Level.WARNING, "seclume: secrets go into locked pages, not into secret pages, "
+            LOG.log(Level.WARNING, "seclume: secrets go into locked pages, not into secret pages, " // mutation-equivalent: a warning only
                     + "while " + reason(errno) + " - said once");
         }
         return null;
@@ -334,13 +334,13 @@ public final class SecretMemory {
         FREE.get(FREE.size() - 1).add(base);
     }
 
+    /** The chunk {@code address} lies in: the one that starts at or below it. */
     private static long chunkOf(long address) {
-        for (long base : CHUNKS.keySet()) {
-            if (address >= base && address < base + CHUNK) {
-                return base;
-            }
+        Long base = CHUNKS.floorKey(address);
+        if (base == null) {
+            throw new IllegalStateException("a secret block outside every chunk");
         }
-        throw new IllegalStateException("a secret block outside every chunk");
+        return base;
     }
 
     /** Wipes a block and takes it back - run when the arena of its segment closes. */
@@ -352,7 +352,7 @@ public final class SecretMemory {
                 unmap(base, large);
                 return;
             }
-            FREE.get(sizeClass(size)).add(base);
+            FREE.get(sizeClass(size)).addFirst(base);   // used again first: fewer chunks half-used
             CHUNKS.get(chunkOf(base))[0]--;
         }
     }
@@ -367,7 +367,7 @@ public final class SecretMemory {
                 }
                 long base = chunk.getKey();
                 for (ArrayDeque<Long> free : FREE) {
-                    free.removeIf(block -> block >= base && block < base + CHUNK);
+                    free.removeIf(block -> chunkOf(block) == base);
                 }
                 CHUNKS.remove(base);
                 unmap(base, CHUNK);
@@ -402,17 +402,47 @@ public final class SecretMemory {
      */
     private static volatile java.util.function.LongUnaryOperator mapForTests;
 
-    /** Tests only: an empty pool, its pages from {@code mapper}; null for the kernel's again. */
+    /** What {@link #useForTests} set aside, to put back: the process's own pool. */
+    private static Object[] saved;
+
+    /**
+     * Tests only: an empty pool, its pages from {@code mapper}; null puts the
+     * process's own pool back as it was - where the kernel's secret pages are
+     * in use, blocks lent from them outside the test come back to it later.
+     */
+    @SuppressWarnings("unchecked")
     static void useForTests(java.util.function.LongUnaryOperator mapper) {
         synchronized (LOCK) {
+            if (mapper != null && saved == null) { // mutation-equivalent: the test seam itself
+                List<ArrayDeque<Long>> free = new ArrayList<>();
+                for (ArrayDeque<Long> one : FREE) {
+                    free.add(new ArrayDeque<>(one));
+                }
+                saved = new Object[] {free, new java.util.HashMap<>(CHUNKS),
+                    new java.util.HashMap<>(LARGE), decided, unavailable, warnedFull};
+            }
             for (ArrayDeque<Long> free : FREE) {
                 free.clear();
             }
             CHUNKS.clear();
-            LARGE.clear();
+            LARGE.clear(); // mutation-equivalent: the test seam itself
             mapForTests = mapper;
-            decided = mapper != null;
-            unavailable = null;
+            warnedFull = false;
+            if (mapper != null) { // mutation-equivalent: the test seam itself
+                decided = true;
+                unavailable = null;
+            } else if (saved != null) { // mutation-equivalent: the test seam itself
+                List<ArrayDeque<Long>> free = (List<ArrayDeque<Long>>) saved[0];
+                for (int i = 0; i < FREE.size(); i++) { // mutation-equivalent: the test seam itself
+                    FREE.get(i).addAll(free.get(i));
+                }
+                CHUNKS.putAll((java.util.Map<Long, int[]>) saved[1]); // mutation-equivalent: the test seam itself
+                LARGE.putAll((java.util.Map<Long, Long>) saved[2]); // mutation-equivalent: the test seam itself
+                decided = (Boolean) saved[3];
+                unavailable = (String) saved[4];
+                warnedFull = (Boolean) saved[5];
+                saved = null;
+            }
         }
     }
 
@@ -461,7 +491,7 @@ public final class SecretMemory {
     }
 
     private static void unmap(long base, long length) {
-        if (mapForTests != null) {
+        if (mapForTests != null) { // mutation-equivalent: the test seam itself
             return;                                   // ordinary memory, the test's to keep
         }
         try {

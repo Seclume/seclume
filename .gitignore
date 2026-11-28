@@ -20,3 +20,6 @@ crash-*
 
 # Atomikos transaction logs written by the framework tests
 tmlog*.log
+
+# JVM crash logs (a mutant run that faulted): they hold the machine's paths and environment
+hs_err_pid*.log
