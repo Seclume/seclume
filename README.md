@@ -334,7 +334,11 @@ It does **not** make the process a vault:
   heap whatever driver you use. The starter warns about plaintext passwords it can see, and
   `seclume-heapcheck` finds any secret you name in a running process.
 - **Someone who can read the process's memory, or the secret's source, has the secret.**
-  Root, `ptrace` or `/proc/<pid>/mem` read native memory as well. What seclume does narrow
+  On Linux with `memfd_secret` (by default from 6.5), seclume keeps secrets in secret pages
+  that neither another process nor root reads through `ptrace` or `/proc/<pid>/mem`;
+  `-Dseclume.dumpable=false` refuses such access to the whole process, at the cost of `jcmd`
+  and `heapcheck --pid`. Without them, root, `ptrace` or `/proc/<pid>/mem` read native memory
+  as well, and the kernel always can. What seclume does narrow
   is *when*: once a login is done, the password is nowhere in the process - not in the heap
   and not in native memory, which `ProcessMemoryTest` checks by reading all of it. During a
   login it is. Someone who can read

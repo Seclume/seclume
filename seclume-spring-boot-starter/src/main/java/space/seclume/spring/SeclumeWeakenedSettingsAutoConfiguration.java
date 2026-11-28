@@ -102,6 +102,7 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
         flag(found, systemProperty, "seclume.secret.process.allowed", "true");
         flag(found, systemProperty, "seclume.shamir.allowUnprotected", "true");
         flag(found, systemProperty, "seclume.debug.unsafe", "true");
+        flag(found, systemProperty, "seclume.secretmem", "false");
         String scram = systemProperty.apply("seclume.scram.minIterations");
         if (scram != null && scram.strip().matches("[0-9]{1,8}")
                 && Integer.parseInt(scram.strip()) < 4096) {
