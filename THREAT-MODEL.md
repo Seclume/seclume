@@ -91,12 +91,23 @@ answers seclume.
 ### A5 - Another unprivileged process on the same host
 
 - **Defence:**
-  - Secret pages are locked (`mlock`/`VirtualLock`) so they do not go to swap.
-  - Those pages are marked `MADV_DONTDUMP` so they stay out of core dumps.
+  - On Linux with `memfd_secret` (5.14 on, by default from 6.5), secrets live in secret pages:
+    removed from the kernel's direct map, they are locked, in no core dump, and not readable
+    through `ptrace`, `/proc/<pid>/mem` or `process_vm_readv` - by another process of the same
+    user, and by root without a kernel exploit. `seclume.secretmem` is `true` by default;
+    `required` refuses a secret it cannot put there, `false` is named among the weakened
+    settings. Where the kernel has none, that is said once, and the next two points apply.
+  - Otherwise secret pages are locked (`mlock`/`VirtualLock`) so they do not go to swap, and
+    marked `MADV_DONTDUMP` so they stay out of core dumps.
+  - `-Dseclume.dumpable=false` (opt-in) makes the process not dumpable before its first secret:
+    `ptrace` and `/proc/<pid>/mem` are refused to other processes of the same user - and so are
+    `jcmd` and `seclume-heapcheck --pid`, which is why it is not the default.
   - Secrets are zeroed when their scope closes.
   - heapcheck never takes a secret on its command line, where every process could read it.
-- **Residual:** same-user processes with `ptrace` or `/proc/<pid>/mem` access can read native
-  memory as well as the heap. That is the operating system's boundary, not seclume's.
+- **Residual:** without secret pages and without `seclume.dumpable=false`, same-user processes
+  with `ptrace` or `/proc/<pid>/mem` access can read native memory as well as the heap. With
+  them, the heap - where seclume puts no secret - is still readable to a debugger the process
+  lets attach.
 
 ### A6 - Hostile files handed to the tools
 
@@ -137,8 +148,11 @@ here.
 
 ## Out of scope
 
-- **Root, the kernel, the hypervisor, physical access.** Anyone who can read any process's
-  memory can read seclume's.
+- **The kernel, the hypervisor, physical access, and root with a kernel exploit or a debugger
+  the process lets in.** Secret pages keep a secret from root's ordinary ways of reading another
+  process (`/proc/<pid>/mem`, `ptrace`); they do not keep it from the kernel itself. Short-lived
+  credentials (Vault, IAM, SPIFFE) and keys that never leave a KMS limit what such an attacker
+  takes, and for how long.
 - **Code running inside the JVM:** a Java agent, a deserialization gadget, a malicious
   dependency. It can call into native memory as seclume does. seclume narrows what such code
   finds lying around, but it is not a sandbox.

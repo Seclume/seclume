@@ -5,6 +5,22 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- **Secret pages on Linux: `memfd_secret`.** Where the kernel offers it (Linux 5.14 on, by
+  default from 6.5), every `SecretScope` lives in secret pages: removed from the kernel's direct
+  map, locked, in no core dump, and not readable through `ptrace`, `/proc/<pid>/mem` or
+  `process_vm_readv` - not by another process of the same user, and not by root without a
+  kernel exploit. Pages are mapped in 64 KiB chunks and handed out in blocks, wiped when given
+  back; before a checkpoint the idle chunks go back to the kernel. Where the kernel has none,
+  seclume says so once and locks pages as before. `-Dseclume.secretmem=required` refuses a
+  secret it cannot put there; `-Dseclume.secretmem=false` does without, and is named among the
+  weakened settings.
+- **`-Dseclume.dumpable=false`: a process other processes cannot read.** Opt-in:
+  `prctl(PR_SET_DUMPABLE, 0)` before the first secret, so that `ptrace`, `/proc/<pid>/mem` and
+  core dumps are refused - to `jcmd` and `seclume-heapcheck --pid` as well, which is why it is
+  not the default. Asked for where it cannot be had (not Linux), the first secret is refused.
+
 ## [0.15.0] - 2026-11-28
 
 ### Upgrading: what changes behaviour

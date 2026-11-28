@@ -50,6 +50,12 @@ public final class SecretScope implements AutoCloseable {
     private final boolean ownsArena;
     private final MemorySegment segment;
     private final boolean locked;
+    /**
+     * In secret pages ({@link space.seclume.internal.SecretMemory}): locked and
+     * out of dumps by the kernel itself, and given back when the arena closes -
+     * {@link MemoryLock} has nothing to count for it.
+     */
+    private final boolean secretPages;
     private int length;
     /**
      * Set once, by whichever close gets there first. A shared scope can be
@@ -77,14 +83,32 @@ public final class SecretScope implements AutoCloseable {
             }
             throw new IllegalArgumentException("capacity must be positive");
         }
+        try {
+            // -Dseclume.dumpable=false: not dumpable before the first secret, or none.
+            space.seclume.internal.ProcessHardening.apply();
+        } catch (RuntimeException refused) {
+            if (ownsArena) {
+                arena.close();
+            }
+            throw refused;
+        }
         this.arena = arena;
         this.ownsArena = ownsArena;
         MemorySegment allocated = null;
         try {
-            allocated = arena.allocate(capacity);
-            // May throw: -Dseclume.mlock.required=true makes a page that cannot
-            // be pinned and kept out of dumps an error rather than a warning.
-            this.locked = MemoryLock.lock(allocated);
+            // Secret pages where the kernel has them: neither another process
+            // nor root reads them through /proc/<pid>/mem or ptrace. May throw
+            // under -Dseclume.secretmem=required.
+            allocated = space.seclume.internal.SecretMemory.allocate(capacity, arena);
+            this.secretPages = allocated != null;
+            if (allocated == null) {
+                allocated = arena.allocate(capacity);
+                // May throw: -Dseclume.mlock.required=true makes a page that cannot
+                // be pinned and kept out of dumps an error rather than a warning.
+                this.locked = MemoryLock.lock(allocated);
+            } else {
+                this.locked = true;
+            }
         } catch (Throwable t) {
             // Nothing secret is in it yet, but an arena of our own that is
             // never closed is native memory nobody will ever release.
@@ -377,7 +401,9 @@ public final class SecretScope implements AutoCloseable {
             // never given back keeps the page pinned for good once another
             // secret there did get locked.
             try {
-                MemoryLock.unlock(segment);
+                if (!secretPages) {
+                    MemoryLock.unlock(segment);
+                }
             } finally {
                 if (ownsArena) {
                     arena.close();
