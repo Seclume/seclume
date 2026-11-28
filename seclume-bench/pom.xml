@@ -18,7 +18,7 @@
 
   <properties>
     <jmh.version>1.37</jmh.version>
-    <mongodb.version>5.14.0</mongodb.version>
+    <mongodb.version>5.15.0</mongodb.version>
     <!-- Into no repository, nowhere at all. -->
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
@@ -89,7 +89,7 @@
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
-      <version>42.7.14</version>
+      <version>42.7.15</version>
     </dependency>
     <dependency>
       <groupId>com.mysql</groupId>

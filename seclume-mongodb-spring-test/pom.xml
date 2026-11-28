@@ -15,10 +15,10 @@
     seclume's own MongoDB driver - with the MongoDB driver version Spring Boot
     manages, not the one the driver is built against. Not published.</description>
   <properties>
-    <spring.boot.version>4.1.2</spring.boot.version>
+    <spring.boot.version>4.2.0</spring.boot.version>
     <!-- What Spring Boot 4.1.1 manages: an application on Boot gets these
          interfaces, so the driver is tested against them. -->
-    <boot.mongodb.version>5.14.0</boot.mongodb.version>
+    <boot.mongodb.version>5.15.0</boot.mongodb.version>
     <junit.version>6.0.1</junit.version>
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
@@ -64,12 +64,12 @@
     <dependency>
       <groupId>io.projectreactor</groupId>
       <artifactId>reactor-core</artifactId>
-      <version>3.8.8</version>
+      <version>3.9.0</version>
     </dependency>
     <dependency>
       <groupId>io.projectreactor</groupId>
       <artifactId>reactor-test</artifactId>
-      <version>3.8.8</version>
+      <version>3.9.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
