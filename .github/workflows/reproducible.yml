@@ -10,6 +10,11 @@ name: Release rebuild
 # Started when the GitHub release is published - after the deploy, so the jars
 # are on Central by then, or soon: the download is retried for a while - and
 # by hand for any earlier tag.
+#
+# Built with the JDK the release was built with, to the build: the Temurin
+# release named in the tag's .github/release-jdk. Another patch release of the
+# JDK writes other javadoc, and "25" would be whichever is newest that day.
+# A tag from before that file names its JDK by hand.
 
 on:
   release:
@@ -19,6 +24,9 @@ on:
       tag:
         description: the release tag to rebuild, e.g. v0.15.0
         required: true
+      jdk:
+        description: the Temurin release it was built with, e.g. jdk-25+36 - empty for the tag's .github/release-jdk
+        required: false
 
 permissions:
   contents: read
@@ -57,12 +65,34 @@ jobs:
         with:
           ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
-        with:
-          distribution: temurin
-          java-version: '25'
-          # No cache: a rebuild that vouches for a release starts from nothing
-          # another run could have left behind.
+      # No setup-java and no cache: the exact JDK, checked against the checksum
+      # Adoptium publishes, and nothing another run could have left behind.
+      - name: The JDK the release was built with
+        env:
+          JDK_INPUT: ${{ inputs.jdk }}
+        run: |
+          set -euo pipefail
+          release="${JDK_INPUT:-}"
+          if [ -z "$release" ] && [ -f .github/release-jdk ]; then
+            release="$(tr -d '[:space:]' < .github/release-jdk)"
+          fi
+          case "$release" in
+            jdk-[0-9]*) ;;
+            *) echo "no Temurin release named for $TAG: give it as the jdk input"; exit 1 ;;
+          esac
+          api="https://api.adoptium.net/v3/assets/release_name/eclipse/${release//+/%2B}"
+          api="$api?architecture=x64&heap_size=normal&image_type=jdk&os=linux&project=jdk"
+          curl -fsS "$api" -o "$RUNNER_TEMP/jdk.json"
+          link="$(jq -r '.binaries[0].package.link' "$RUNNER_TEMP/jdk.json")"
+          sum="$(jq -r '.binaries[0].package.checksum' "$RUNNER_TEMP/jdk.json")"
+          curl -fsSL "$link" -o "$RUNNER_TEMP/jdk.tar.gz"
+          echo "$sum  $RUNNER_TEMP/jdk.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/jdk"
+          tar -xzf "$RUNNER_TEMP/jdk.tar.gz" -C "$RUNNER_TEMP/jdk" --strip-components=1
+          echo "JAVA_HOME=$RUNNER_TEMP/jdk" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/jdk/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/jdk/bin/java" -version
+          echo "JDK: $release" >> "$GITHUB_STEP_SUMMARY"
       - name: Build the tag as the release is built
         # -Prelease adds sources and javadoc; the signature is the
         # maintainer's and is not made here.
@@ -95,6 +125,7 @@ jobs:
             done
             if [ -z "$got" ]; then
               echo "| \`$name\` | not on Central (not published, or not yet) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "$name: not on Central"
               continue
             fi
             compared=$((compared + 1))
@@ -102,10 +133,12 @@ jobs:
             theirs=$(sha256sum central.jar | cut -d' ' -f1)
             if [ "$ours" = "$theirs" ]; then
               echo "| \`$name\` | same: \`$ours\` |" >> "$GITHUB_STEP_SUMMARY"
+              echo "$name: same"
               echo "$jar" >> matched.txt
             else
               differ=$((differ + 1))
               echo "| \`$name\` | **differs**: built \`$ours\`, Central \`$theirs\` |" >> "$GITHUB_STEP_SUMMARY"
+              echo "$name: differs"
             fi
           done
           rm -f central.jar
