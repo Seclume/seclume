@@ -21,8 +21,8 @@ credential never becomes a heap object - and a tool that shows you whether yours
 For any running JVM application, whatever driver it uses:
 
 ```sh
-curl -LO https://repo1.maven.org/maven2/space/seclume/seclume-heapcheck/0.14.0/seclume-heapcheck-0.14.0.jar
-java -jar seclume-heapcheck-0.14.0.jar --pid <pid> --secret-file /run/secrets/db-password
+curl -LO https://repo1.maven.org/maven2/space/seclume/seclume-heapcheck/0.15.0/seclume-heapcheck-0.15.0.jar
+java -jar seclume-heapcheck-0.15.0.jar --pid <pid> --secret-file /run/secrets/db-password
 ```
 
 ```
@@ -124,12 +124,12 @@ where it is behind ([Speed](#speed)). See [Features at a glance](#features-at-a-
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-spring-boot-starter</artifactId>
-  <version>0.14.0</version>
+  <version>0.15.0</version>
 </dependency>
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-postgresql</artifactId>   <!-- or -mysql, -sqlserver, -oracle -->
-  <version>0.14.0</version>
+  <version>0.15.0</version>
 </dependency>
 ```
 

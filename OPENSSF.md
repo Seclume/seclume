@@ -47,7 +47,7 @@ Links are relative to `https://github.com/Seclume/seclume/blob/main/`.
 | `repo_track` | MUST | Met | git: who changed what, when |
 | `repo_interim` | MUST | Met | every change reaches `main` through a pull request between releases |
 | `repo_distributed` | SUGGESTED | Met | git |
-| `version_unique` | MUST | Met | `v0.9.0` ... `v0.14.0` |
+| `version_unique` | MUST | Met | `v0.9.0` ... `v0.15.0` |
 | `version_semver` | SUGGESTED | Met | [CHANGELOG.md](CHANGELOG.md): "Versions follow Semantic Versioning" |
 | `version_tags` | SUGGESTED | Met | signed tags per release ([SECURITY.md](SECURITY.md#verifying-a-release)) |
 | `release_notes` | MUST | Met | URL: [CHANGELOG.md](CHANGELOG.md) |
