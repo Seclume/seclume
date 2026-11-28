@@ -172,8 +172,8 @@ metadata:
 
 ```sh
 ./mvnw -pl seclume-admission,seclume-heapcheck -am package -DskipTests
-seclume-admission/deploy/build-image.sh registry.example/seclume-admission:0.14.0   # then push it
-SECLUME_IMAGE=registry.example/seclume-admission:0.14.0 seclume-admission/deploy/install.sh
+seclume-admission/deploy/build-image.sh registry.example/seclume-admission:0.15.0   # then push it
+SECLUME_IMAGE=registry.example/seclume-admission:0.15.0 seclume-admission/deploy/install.sh
 kubectl label namespace shop seclume.space/inject=enabled
 ```
 
@@ -562,7 +562,7 @@ dump of your application after login or rotation, use the composite action:
 ```yaml
 - uses: ./.github/actions/heapcheck
   with:
-    jar: seclume-heapcheck/target/seclume-heapcheck-0.14.0.jar
+    jar: seclume-heapcheck/target/seclume-heapcheck-0.15.0.jar
     dump: app.hprof
     secret-directory: /run/secrets/app   # optional with discover
     discover: 'true'                       # optional: credentials nobody named

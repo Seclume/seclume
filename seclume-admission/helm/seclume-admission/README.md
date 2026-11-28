@@ -11,8 +11,8 @@ what is injected and why.
 
 ```sh
 ./mvnw -pl seclume-admission,seclume-heapcheck -am package -DskipTests
-seclume-admission/deploy/build-image.sh registry.example/seclume-admission:0.14.0
-docker push registry.example/seclume-admission:0.14.0
+seclume-admission/deploy/build-image.sh registry.example/seclume-admission:0.15.0
+docker push registry.example/seclume-admission:0.15.0
 
 helm install seclume-admission seclume-admission/helm/seclume-admission \
   --namespace seclume-system --create-namespace \

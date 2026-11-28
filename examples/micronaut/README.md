@@ -20,12 +20,12 @@ The same as for [getting-started](../getting-started/README.md#1-a-database-and-
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-micronaut</artifactId>
-  <version>0.14.0</version>
+  <version>0.15.0</version>
 </dependency>
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-postgresql</artifactId>
-  <version>0.14.0</version>
+  <version>0.15.0</version>
 </dependency>
 ```
 
