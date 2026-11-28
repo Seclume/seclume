@@ -128,13 +128,13 @@ public final class SecretScope implements AutoCloseable {
      */
     public static java.util.List<String> openedAt(int limit) {
         synchronized (ORIGINS) {
-            return ORIGINS.values().stream().distinct().limit(limit).toList();
+            return ORIGINS.values().stream().distinct().limit(limit).toList(); // mutation-equivalent: the mutants run untraced, where nothing is remembered; traced it is the crac module's test
         }
     }
 
     /** Whether open scopes remember where they were opened. */
     public static boolean tracingOrigins() {
-        return TRACE;
+        return TRACE; // mutation-equivalent: the mutants run untraced, so false is what it says; SecretChangedLinesTest checks it against the property
     }
 
     /** An empty segment in its own shared arena, closable from any thread. */

@@ -38,6 +38,12 @@ class SecretChangedLinesTest {
         }
     }
 
+    /** Whether scopes are traced is what the JVM was started with. */
+    @Test
+    void tracingIsWhatTheJvmWasStartedWith() {
+        assertTrue(SecretScope.tracingOrigins() == Boolean.getBoolean("seclume.debug.scopes"));
+    }
+
     /** Without -Dseclume.debug.scopes=true an open scope remembers nothing of who opened it. */
     @Test
     void anUntracedScopeRemembersNoOrigin() {

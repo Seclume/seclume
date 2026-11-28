@@ -120,8 +120,8 @@ public final class JdbcEscapes {
             int i = at + 1;
             while (i < sql.length()) {
                 char c = sql.charAt(i);
-                if (c == '\\' && quote == '\'' && dialect == Dialect.MYSQL && backslashEscapes
-                        && i + 1 < sql.length()) {
+                if (c == '\\' && quote == '\'' && dialect == Dialect.MYSQL && backslashEscapes // mutation-equivalent: at the text's last character, skipping one or two ends the loop alike
+                        && i + 1 < sql.length()) { // mutation-equivalent: at the text's last character, skipping one or two ends the loop alike
                     i += 2;
                     continue;
                 }

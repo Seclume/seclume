@@ -146,7 +146,7 @@ public final class PatroniTopology implements ClusterTopology {
         /** The address a literal names, or null for a host name. */
         static byte[] address(String literal) {
             if (literal.isEmpty() || !(literal.indexOf(':') >= 0
-                    || literal.chars().allMatch(c -> c == '.' || (c >= '0' && c <= '9')))) {
+                    || literal.chars().allMatch(c -> c == '.' || (c >= '0' && c <= '9')))) { // mutation-equivalent: a name let through is refused by InetAddress.ofLiteral, and null is returned all the same
                 return null;
             }
             try {

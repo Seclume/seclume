@@ -80,6 +80,58 @@ class ClosedNativeKeyTest {
         }
     }
 
+    /**
+     * The same of the OpenSSL backends themselves, beneath the wrappers that
+     * check first: a second line, which a wrapper's check must not be the
+     * only one of. Where libcrypto is (Linux, macOS).
+     */
+    @Test
+    void theOpenSslBackendsRefuseAfterCloseAndReleaseTheirKey() throws Exception {
+        Assumptions.assumeTrue(LibCrypto.available(), "no libcrypto here");
+        try (Arena arena = Arena.ofConfined()) {
+            OpenSslEcdh peer = new OpenSslEcdh(NativeEcdh.Group.P384);
+            MemorySegment point = arena.allocate(NativeEcdh.Group.P384.publicSize());
+            peer.publicKey(point);
+            OpenSslEcdh ecdh = new OpenSslEcdh(NativeEcdh.Group.P384);
+            MemorySegment secret = arena.allocate(NativeEcdh.Group.P384.secretSize());
+            ecdh.derive(point, secret);
+            ecdh.close();
+            ecdh.close();
+            assertThrows(IllegalStateException.class, () -> ecdh.derive(point, secret));
+            assertReleased(ecdh);
+            peer.close();
+
+            EcdsaSigner.Curve curve = EcdsaSigner.Curve.P256;
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+            generator.initialize(new ECGenParameterSpec("secp256r1"));
+            KeyPair pair = generator.generateKeyPair();
+            int field = curve.field();
+            MemorySegment publicPoint = arena.allocate(curve.pointSize());
+            publicPoint.set(ValueLayout.JAVA_BYTE, 0, (byte) 4);
+            copy(((ECPublicKey) pair.getPublic()).getW().getAffineX(), publicPoint, 1, field);
+            copy(((ECPublicKey) pair.getPublic()).getW().getAffineY(), publicPoint, 1 + field, field);
+            MemorySegment scalar = arena.allocate(field);
+            copy(((ECPrivateKey) pair.getPrivate()).getS(), scalar, 0, field);
+            OpenSslEcdsaSigner signer = new OpenSslEcdsaSigner(curve, publicPoint, scalar);
+            MemorySegment digest = arena.allocate(32);
+            MemorySegment der = arena.allocate(curve.maxSignature());
+            assertTrue(signer.sign(digest, der) > 0);
+            signer.close();
+            signer.close();
+            assertTimeoutPreemptively(Duration.ofSeconds(10),
+                    () -> assertThrows(IllegalStateException.class, () -> signer.sign(digest, der)),
+                    "a use after close hung - the close kept its lock");
+            assertReleased(signer);
+        }
+    }
+
+    /** The backend's handle on the native key is gone: it was freed, not left for nobody. */
+    private static void assertReleased(Object backend) throws Exception {
+        java.lang.reflect.Field key = backend.getClass().getDeclaredField("key");
+        key.setAccessible(true);
+        assertEquals(MemorySegment.NULL, key.get(backend), backend.getClass().getSimpleName());
+    }
+
     private static void copy(BigInteger value, MemorySegment out, int at, int length) {
         byte[] bytes = value.toByteArray();
         int from = Math.max(0, bytes.length - length);

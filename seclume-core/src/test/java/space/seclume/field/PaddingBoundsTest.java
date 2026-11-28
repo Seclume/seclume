@@ -29,6 +29,9 @@ class PaddingBoundsTest {
         assertEquals("none", Padding.NONE.code());
         assertEquals("pow2:16", Padding.toPowerOfTwo(16).code());
         assertEquals("mul:16", Padding.toMultipleOf(16).code());
+        assertEquals("no padding", Padding.NONE.toString());
+        assertEquals("padded to powers of two from 16", Padding.toPowerOfTwo(16).toString());
+        assertEquals("padded to multiples of 16", Padding.toMultipleOf(16).toString());
     }
 
     /**
