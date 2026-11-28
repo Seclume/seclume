@@ -390,7 +390,20 @@ class SpiffeTest {
      * failure seen only on the sanitizer job's runner did not say.
      */
     private static String spiffeThreads() {
-        StringBuilder out = new StringBuilder("; threads:");
+        StringBuilder out = new StringBuilder("; opened by:");
+        try {
+            java.lang.reflect.Method details = Class.forName("space.seclume.crypto.LiveKeys")
+                    .getDeclaredMethod("details");
+            details.setAccessible(true);
+            for (Object one : (List<?>) details.invoke(null)) {
+                if (String.valueOf(one).contains("Spiffe")) {
+                    out.append(" [").append(one).append(']');
+                }
+            }
+        } catch (ReflectiveOperationException unavailable) {
+            out.append(" (unavailable: ").append(unavailable).append(')');
+        }
+        out.append("; threads:");
         Thread.getAllStackTraces().forEach((thread, frames) -> {
             if (thread.getName().contains("spiffe") || java.util.Arrays.stream(frames)
                     .anyMatch(f -> f.getClassName().contains("Spiffe"))) {

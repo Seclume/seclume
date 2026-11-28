@@ -97,7 +97,9 @@ class ClosedNativeKeyTest {
             ecdh.derive(point, secret);
             ecdh.close();
             ecdh.close();
-            assertThrows(IllegalStateException.class, () -> ecdh.derive(point, secret));
+            // Its own check says so - not a failure of OpenSSL handed a freed key.
+            assertTrue(assertThrows(IllegalStateException.class, () -> ecdh.derive(point, secret))
+                    .getMessage().contains("was closed"), "the backend's own check did not refuse");
             assertReleased(ecdh);
             peer.close();
 
@@ -119,7 +121,9 @@ class ClosedNativeKeyTest {
             signer.close();
             signer.close();
             assertTimeoutPreemptively(Duration.ofSeconds(10),
-                    () -> assertThrows(IllegalStateException.class, () -> signer.sign(digest, der)),
+                    () -> assertTrue(assertThrows(IllegalStateException.class,
+                            () -> signer.sign(digest, der)).getMessage().contains("was closed"),
+                            "the backend's own check did not refuse"),
                     "a use after close hung - the close kept its lock");
             assertReleased(signer);
         }
