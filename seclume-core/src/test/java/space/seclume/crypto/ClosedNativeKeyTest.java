@@ -1,6 +1,7 @@
 package space.seclume.crypto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,7 @@ import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.time.Duration;
+import java.util.List;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -127,6 +129,29 @@ class ClosedNativeKeyTest {
                     "a use after close hung - the close kept its lock");
             assertReleased(signer);
         }
+    }
+
+    /**
+     * For a test that finds a key still held: where it was opened - the
+     * thread, then the first calls outside this package, by simple name. This
+     * test is inside the package itself, so the first call outside is the
+     * test framework's.
+     */
+    @Test
+    void aKeyHeldSaysWhereItWasOpened() {
+        Assumptions.assumeTrue(PrivateSigningKey.available(), "neither OpenSSL 3 nor CNG here");
+        String thread = Thread.currentThread().getName();
+        try (PrivateSigningKey key = PrivateSigningKey.generateP256()) {
+            assertTrue(key.publicKey().length > 0);
+            List<String> mine = LiveKeys.details().stream()
+                    .filter(d -> d.startsWith(thread + " at ")).toList();
+            assertEquals(1, mine.size(), LiveKeys.details().toString());
+            assertTrue(mine.get(0).startsWith(thread + " at ReflectionUtils."), mine.get(0));
+            assertFalse(mine.get(0).contains("ClosedNativeKeyTest") || mine.get(0).contains("LiveKeys"),
+                    "a call inside the package was named: " + mine.get(0));
+        }
+        assertTrue(LiveKeys.details().stream().noneMatch(d -> d.startsWith(thread + " at ")),
+                "a closed key is still listed");
     }
 
     /** The backend's handle on the native key is gone: it was freed, not left for nobody. */
