@@ -65,6 +65,15 @@ jobs:
         with:
           ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
+      # The comparing script from this workflow's own commit: a tag from
+      # before it has none. Outside the build, under _tools.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: _tools
+          sparse-checkout: .github/scripts/jar_entries_diff.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       # No setup-java and no cache: the exact JDK, checked against the checksum
       # Adoptium publishes, and nothing another run could have left behind.
       - name: The JDK the release was built with
@@ -139,6 +148,7 @@ jobs:
               differ=$((differ + 1))
               echo "| \`$name\` | **differs**: built \`$ours\`, Central \`$theirs\` |" >> "$GITHUB_STEP_SUMMARY"
               echo "$name: differs"
+              python3 -I _tools/.github/scripts/jar_entries_diff.py "$jar" central.jar || true
             fi
           done
           rm -f central.jar
