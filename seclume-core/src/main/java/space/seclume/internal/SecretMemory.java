@@ -58,9 +58,6 @@ public final class SecretMemory {
     private static final MethodHandle FTRUNCATE;
     private static final MethodHandle MMAP;
     private static final MethodHandle MUNMAP;
-    private static final MethodHandle MADVISE;
-    /** Faults every page of a range in for writing, or fails with an errno: Linux 5.14 on. */
-    private static final int MADV_POPULATE_WRITE = 23;
     private static final MethodHandle CLOSE;
     private static final VarHandle ERRNO;
     private static final long ERRNO_SIZE;
@@ -83,7 +80,6 @@ public final class SecretMemory {
         MethodHandle ftruncate = null;
         MethodHandle mmap = null;
         MethodHandle munmap = null;
-        MethodHandle madvise = null;
         MethodHandle close = null;
         VarHandle errno = null;
         long errnoSize = 0;
@@ -94,10 +90,12 @@ public final class SecretMemory {
                 var state = Linker.Option.captureStateLayout();
                 errno = state.varHandle(java.lang.foreign.MemoryLayout.PathElement.groupElement("errno"));
                 errnoSize = state.byteSize();
-                // long syscall(long number, ...);
+                // long syscall(long number, ...); it reads every argument as a long,
+                // so the flags go as one: an int leaves the register's upper half
+                // undefined, and the kernel sees flags nobody gave - EINVAL.
                 syscall = linker.downcallHandle(libc.find("syscall").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
-                                ValueLayout.JAVA_INT),
+                                ValueLayout.JAVA_LONG),
                         Linker.Option.firstVariadicArg(1), Linker.Option.captureCallState("errno"));
                 // int ftruncate(int fd, off_t length);
                 ftruncate = linker.downcallHandle(libc.find("ftruncate").orElseThrow(),
@@ -113,11 +111,6 @@ public final class SecretMemory {
                 munmap = linker.downcallHandle(libc.find("munmap").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                                 ValueLayout.JAVA_LONG));
-                // int madvise(void *addr, size_t length, int advice);
-                madvise = linker.downcallHandle(libc.find("madvise").orElseThrow(),
-                        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                                ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT),
-                        Linker.Option.captureCallState("errno"));
                 // int close(int fd);
                 close = linker.downcallHandle(libc.find("close").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
@@ -130,7 +123,6 @@ public final class SecretMemory {
         FTRUNCATE = ftruncate;
         MMAP = mmap;
         MUNMAP = munmap;
-        MADVISE = madvise;
         CLOSE = close;
         ERRNO = errno;
         ERRNO_SIZE = errnoSize;
@@ -201,7 +193,7 @@ public final class SecretMemory {
                 // One chunk now: whether the kernel has it at all is seen at once.
                 long base = map(CHUNK);
                 if (base < 0) { // mutation-equivalent: no mapping is at address 0
-                    why = reason(-base);
+                    why = reason(-base) + " (at " + failedAt + ")";
                 } else {
                     addChunk(base);
                 }
@@ -446,35 +438,53 @@ public final class SecretMemory {
         }
     }
 
-    /** Maps {@code length} bytes of secret pages: the address, or minus errno. */
+    /** The step of the last {@link #map} that failed: memfd_secret, ftruncate, mmap or the first write. */
+    private static volatile String failedAt = "memfd_secret";
+
+    /**
+     * Maps {@code length} bytes of secret pages: the address, or minus errno.
+     *
+     * <p>Secret pages count against the memlock limit, and past it the kernel
+     * does not always refuse the mapping: the first write to a page there was a
+     * SIGBUS. So the limit is looked at first, and every page is written once
+     * here, before anything is lent from it - HotSpot turns a SIGBUS in a
+     * segment's bulk write into an InternalError, and the secret goes to
+     * locked pages instead. ({@code MADV_POPULATE_WRITE} cannot do it: the
+     * kernel refuses get_user_pages on secret pages, by design.)
+     */
     private static long map(long length) {
         java.util.function.LongUnaryOperator test = mapForTests;
         if (test != null) {
             return test.applyAsLong(length);
         }
+        if (!memlockLeaves(length)) {
+            failedAt = "the memlock limit";
+            return -12;
+        }
         try (Arena call = Arena.ofConfined()) {
             MemorySegment state = call.allocate(ERRNO_SIZE);
-            long fd = (long) SYSCALL.invokeExact(state, SYS_MEMFD_SECRET, 0);
+            long fd = (long) SYSCALL.invokeExact(state, SYS_MEMFD_SECRET, 0L);
             if (fd < 0) {
+                failedAt = "memfd_secret";
                 return -errno(state);
             }
             try {
                 if ((int) FTRUNCATE.invokeExact(state, (int) fd, length) != 0) {
+                    failedAt = "ftruncate";
                     return -errno(state);
                 }
                 MemorySegment mapped = (MemorySegment) MMAP.invokeExact(state, MemorySegment.NULL,
                         length, PROT_READ_WRITE, MAP_SHARED, (int) fd, 0L);
                 if (mapped.address() == -1L) {
+                    failedAt = "mmap";
                     return -errno(state);
                 }
-                // Secret pages are charged to the memlock limit when first
-                // touched, not when mapped: past the limit that first write
-                // was a SIGBUS - a JVM InternalError. Faulted in here, the
-                // limit is an errno, and the secret goes to locked pages instead.
-                if ((int) MADVISE.invokeExact(state, mapped, length, MADV_POPULATE_WRITE) != 0) {
-                    long errno = errno(state);
+                try {
+                    mapped.reinterpret(length).fill((byte) 0);
+                } catch (InternalError fault) {                   // SIGBUS: no page to be had
                     unmap(mapped.address(), length);
-                    return -(errno == 14 ? 12 : errno);   // EFAULT: a page could not be had - no room
+                    failedAt = "the first write";
+                    return -12;
                 }
                 return mapped.address();
             } finally {
@@ -483,6 +493,32 @@ public final class SecretMemory {
         } catch (Throwable t) {
             LOG.log(Level.DEBUG, "memfd_secret failed", t);
             return -UNCALLABLE;
+        }
+    }
+
+    /**
+     * Whether the soft memlock limit leaves {@code length} more bytes: the
+     * limit from /proc/self/limits against VmLck in /proc/self/status. True
+     * when either cannot be read - the kernel then decides alone.
+     */
+    static boolean memlockLeaves(long length) {
+        try {
+            long limit = -1;
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/limits"))) {
+                if (line.startsWith("Max locked memory")) {
+                    String soft = line.substring("Max locked memory".length()).trim().split("\\s+")[0];
+                    limit = soft.equals("unlimited") ? Long.MAX_VALUE : Long.parseLong(soft);
+                }
+            }
+            long locked = -1;
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/status"))) {
+                if (line.startsWith("VmLck:")) {
+                    locked = Long.parseLong(line.substring(6).trim().split("\\s+")[0]) * 1024;
+                }
+            }
+            return limit < 0 || locked < 0 || limit == Long.MAX_VALUE || locked + length <= limit;
+        } catch (java.io.IOException | RuntimeException e) {
+            return true;
         }
     }
 

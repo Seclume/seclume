@@ -405,6 +405,17 @@ class SecretMemoryTest {
         }
     }
 
+    /** Nothing more always fits; past a finite memlock limit nothing does. */
+    @Test
+    void theMemlockLimitIsLookedAtFirst() throws IOException {
+        assertTrue(SecretMemory.memlockLeaves(0));
+        Assumptions.assumeTrue(Platform.isLinux(), "/proc is Linux's");
+        boolean unlimited = java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/limits"))
+                .stream().anyMatch(line -> line.startsWith("Max locked memory") && line.contains("unlimited"));
+        assertEquals(unlimited, SecretMemory.memlockLeaves(Long.MAX_VALUE / 2),
+                "a finite memlock limit leaves room for any length, or an unlimited one does not");
+    }
+
     /** What is said for each errno. */
     @Test
     void eachRefusalIsNamed() {

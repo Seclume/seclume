@@ -656,7 +656,7 @@
         "returnType": "jlong",
         "parameterTypes": [
           "jlong",
-          "jint"
+          "jlong"
         ],
         "options": {
           "captureCallState": true,
@@ -695,17 +695,6 @@
         ],
         "options": {
           "firstVariadicArg": 1
-        }
-      },
-      {
-        "returnType": "jint",
-        "parameterTypes": [
-          "void*",
-          "jlong",
-          "jint"
-        ],
-        "options": {
-          "captureCallState": true
         }
       }
     ]
