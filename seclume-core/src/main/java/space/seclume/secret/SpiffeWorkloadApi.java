@@ -328,8 +328,13 @@ public final class SpiffeWorkloadApi {
                     int length = reader.next();
                     deadline.cancel(false);
                     X509Svid svid = parse(answer.segment(), length);
-                    reader.consumed(length);
+                    // Handed on before the buffer is given back: giving it back
+                    // writes a window update, which fails when the agent has
+                    // just closed - and the SVID decoded a moment before was
+                    // then nobody's, its key in OpenSSL's memory and in every
+                    // checkpoint image after. The SVID needs the buffer no more.
                     each.accept(svid);
+                    reader.consumed(length);
                 }
             } catch (java.nio.channels.AsynchronousCloseException stopped) {
                 if (!closed) {

@@ -314,6 +314,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **An X.509-SVID the agent pushes as it closes is not left in memory.** The stream gave its
+  buffer back - a window update to the agent - before it handed the decoded SVID on; when that
+  write failed, the SVID was nobody's and its key stayed in OpenSSL's memory, through every
+  checkpoint. It is handed on first now.
 - **A shredded subject stays shredded.** A read that came while `SubjectKeys.shred` was deleting
   the key - after the cached ring was dropped, before the store's delete - loaded the key that was
   still stored and cached its ring, and every read after the shred opened the subject's values
