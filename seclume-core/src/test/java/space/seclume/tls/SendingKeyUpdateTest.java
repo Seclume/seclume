@@ -150,6 +150,103 @@ class SendingKeyUpdateTest {
         }
     }
 
+    /**
+     * The same when receiving: a TLS 1.2 peer that sends past the limit has
+     * the connection closed - aborted, so that nothing more goes out on it.
+     */
+    @Test
+    void aTls12ConnectionIsClosedAtTheReceivingLimit() throws Exception {
+        try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
+                .createServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            listener.setEnabledProtocols(new String[] {"TLSv1.2"});
+            Thread echo = new Thread(() -> {
+                try (Socket socket = listener.accept()) {
+                    socket.getInputStream().transferTo(socket.getOutputStream());
+                } catch (IOException gone) {
+                    // the client closed
+                }
+            });
+            echo.setDaemon(true);
+            echo.start();
+
+            SocketTransport transport = SocketTransport.connect("localhost",
+                    listener.getLocalPort(), 5000);
+            TlsLayer tls = TlsLayers.start(TlsStack.SECLUME, transport, "localhost",
+                    listener.getLocalPort(), false);
+            try {
+                TlsConnection connection = connectionOf(tls, 4);
+                assertTrue(connection != null, "no TlsConnection in " + tls.getClass());
+                RecordStream records = records(connection);
+                assertTrue(records.readProtection().isTls12(), "not TLS 1.2 - proves nothing");
+                byte[] sent = new byte[40_000];                  // three records each way
+                ByteBuffer out = ByteBuffer.allocateDirect(sent.length).put(sent).flip();
+                while (out.hasRemaining()) {
+                    tls.write(out);
+                }
+                java.lang.reflect.Field limit = TlsConnection.class.getDeclaredField(
+                        "keyUpdateAfter");
+                limit.setAccessible(true);
+                limit.setLong(connection, records.readProtection().sequence() + 1);
+                ByteBuffer in = ByteBuffer.allocateDirect(sent.length);
+                IOException closed = org.junit.jupiter.api.Assertions.assertThrows(
+                        IOException.class, () -> {
+                            while (in.hasRemaining()) {
+                                if (tls.read(in) < 0) {
+                                    throw new IOException("ended");
+                                }
+                            }
+                        });
+                assertTrue(String.valueOf(closed.getMessage()).contains("received"),
+                        closed.getMessage());
+                echo.join(5_000);
+                org.junit.jupiter.api.Assertions.assertFalse(echo.isAlive(),
+                        "the connection was not closed: the server never saw it end");
+                org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+                        () -> tls.write(ByteBuffer.allocateDirect(1)),
+                        "the connection was used on after its receiving key wore out");
+            } finally {
+                tls.close();
+            }
+        }
+    }
+
+    /**
+     * A connection whose server was not checked is in the cryptography
+     * inventory as such - for the policy's tls.require-authentication - with
+     * the stack that made it.
+     */
+    @Test
+    void anUncheckedConnectionIsInTheInventoryWithItsStack() throws Exception {
+        for (TlsStack stack : new TlsStack[] {TlsStack.SECLUME, TlsStack.JSSE}) {
+            try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
+                    .createServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+                Thread echo = new Thread(() -> {
+                    try (Socket socket = listener.accept()) {
+                        socket.getInputStream().transferTo(socket.getOutputStream());
+                    } catch (IOException gone) {
+                        // the client closed
+                    }
+                });
+                echo.setDaemon(true);
+                echo.start();
+                SocketTransport transport = SocketTransport.connect("localhost",
+                        listener.getLocalPort(), 5000);
+                TlsLayer tls = TlsLayers.start(stack, transport, "localhost",
+                        listener.getLocalPort(), false);
+                try {
+                    String name = stack == TlsStack.SECLUME ? "seclume" : "JSSE";
+                    String port = String.valueOf(listener.getLocalPort());
+                    assertTrue(space.seclume.inventory.CryptoInventory.snapshot().stream()
+                            .anyMatch(asset -> asset.ref().startsWith("protocol:tls-unauthenticated:")
+                                    && asset.ref().contains(port) && asset.ref().endsWith(":" + name)),
+                            stack + ": not in the inventory as unauthenticated");
+                } finally {
+                    tls.close();
+                }
+            }
+        }
+    }
+
     @Test
     void after2To24RecordsTheClientChangesItsKey() throws Exception {
         try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()

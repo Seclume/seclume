@@ -64,7 +64,7 @@ public final class SessionState {
 
     /** Notes one statement's text. */
     public void note(String sql) {
-        if (sql == null || (changed && irreversible && impersonated)) {
+        if (sql == null || (changed && irreversible && impersonated)) { // mutation-equivalent: the early return only saves work: a statement noted again changes nothing
             return;
         }
         java.lang.ref.WeakReference<String> last = harmless;

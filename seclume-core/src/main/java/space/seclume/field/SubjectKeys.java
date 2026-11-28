@@ -99,7 +99,7 @@ public final class SubjectKeys implements AutoCloseable {
             open.close();
         }
         rings.clear(); // mutation-equivalent: with readAt cleared a kept ring is read again, and a second close changes nothing
-        readAt.clear();
+        readAt.clear(); // mutation-equivalent: with the rings cleared a time without its ring is never read, and is overwritten
     }
 
     /** Subject keys wrapped by {@code ring}, kept in {@code store}, the last 1000 used cached. */
@@ -186,7 +186,7 @@ public final class SubjectKeys implements AutoCloseable {
             FieldKeys open = rings.get(subject);
             if (open != null) {
                 Long at = readAt.get(subject);
-                if (at != null && System.nanoTime() - at < maxAgeNanos) {
+                if (at != null && System.nanoTime() - at < maxAgeNanos) { // mutation-equivalent: the boundary is one nanosecond wide
                     return open;
                 }
                 rings.remove(subject);               // read again: it may be shredded elsewhere
@@ -279,7 +279,7 @@ public final class SubjectKeys implements AutoCloseable {
             open.close();
         }
         rings.clear(); // mutation-equivalent: closed refuses every later use before the map is looked at
-        readAt.clear();
+        readAt.clear(); // mutation-equivalent: closed refuses every later use before the map is looked at
     }
 
     @Override

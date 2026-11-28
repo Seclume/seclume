@@ -269,7 +269,7 @@ public final class ColumnRotation {
                         // under a key gone from the ring - stopped the whole
                         // rotation. It is left as it is and counted, with its id.
                         unreadable++;
-                        if (unreadableIds.size() < Progress.IDS_KEPT) {
+                        if (unreadableIds.size() < Progress.IDS_KEPT) { // mutation-equivalent: the batch is added to the run with Progress.plus, which keeps IDS_KEPT as well
                             unreadableIds.add(rowId);
                         }
                         continue;

@@ -32,7 +32,7 @@ public final class SeedDomains {
             int dot = seed.indexOf('.');
             boolean literal = seed.chars().allMatch(ch -> ch == '.' || ch == ':'
                     || Character.digit(ch, 16) >= 0) || seed.startsWith("[");
-            if (!literal && dot > 0 && seed.indexOf('.', dot + 1) > 0
+            if (!literal && dot > 0 && seed.indexOf('.', dot + 1) > 0 // mutation-equivalent: that index is past dot, itself past 0: > 0 and >= 0 agree
                     && name.endsWith(seed.substring(dot))) {
                 return true;
             }
@@ -78,7 +78,7 @@ public final class SeedDomains {
             String host;
             if (entry.startsWith("[")) {
                 int close = entry.indexOf(']');
-                host = close > 0 ? entry.substring(1, close) : entry;
+                host = close > 0 ? entry.substring(1, close) : entry; // mutation-equivalent: the entry starts with [, so ] is never at 0
             } else {
                 int colon = entry.lastIndexOf(':');
                 host = colon > 0 ? entry.substring(0, colon) : entry;

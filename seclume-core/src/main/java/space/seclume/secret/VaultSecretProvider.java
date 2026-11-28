@@ -422,7 +422,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 // The one before stays for a login that took its user already.
                 previousCredential = previous;
                 previousGeneration = generation;
-                generation++;
+                generation++; // mutation-equivalent: generations are only compared for equality, and counting down tells them apart as well
             } catch (Throwable e) {
                 fresh.close();
                 throw e;

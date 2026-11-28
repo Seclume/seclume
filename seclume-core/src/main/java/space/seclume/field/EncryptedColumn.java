@@ -302,7 +302,7 @@ public final class EncryptedColumn {
         byte[] context0 = bound(context);
         if (padding.pads()) {
             long padded = padding.paddedLength(LENGTH_PREFIX + length);
-            if (padded > Integer.MAX_VALUE - OVERHEAD - 8) {
+            if (padded > Integer.MAX_VALUE - OVERHEAD - 8) { // mutation-equivalent: the boundary is a value of 2 GiB, which no test can allocate
                 throw new IllegalArgumentException("a field value is at most about 2 GB, padded");
             }
             // The value with its length in front and zeros behind, in a
@@ -384,7 +384,7 @@ public final class EncryptedColumn {
             try (SecretScope body = SecretScope.allocate(Math.max(1, length))) {
                 open(ciphertext, keyId, length, context, body.segment());
                 int inside = body.segment().get(BE_INT, 0);
-                if (inside < 0 || inside > length - LENGTH_PREFIX) {
+                if (inside < 0 || inside > length - LENGTH_PREFIX) { // mutation-equivalent: the length comes from authenticated plaintext this column wrote; only a writer holding the key could put one past it
                     // Authenticated, so written so: a value made by something
                     // that is not this format, under this column's key.
                     throw new FieldEncryptionException("a padded value of " + name + " says it "

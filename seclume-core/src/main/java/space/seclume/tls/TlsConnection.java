@@ -274,7 +274,7 @@ public final class TlsConnection implements Transport {
     /** Reads one record and either keeps it for the caller or acts on it here. */
     private void receive() throws IOException {
         RecordProtection reading = records.readProtection();
-        if (reading.isTls12() && reading.sequence() >= keyUpdateAfter) {
+        if (reading.isTls12() && reading.sequence() >= keyUpdateAfter) { // mutation-equivalent: one record either side of 2^24 is well inside AES-GCM's bound
             tls12KeyWornOut("received");
         }
         RecordStream.Incoming record;

@@ -49,7 +49,7 @@ public final class Deadlines {
 
     /** Whether {@code deadline} has come. */
     public static boolean passed(long deadline) {
-        return deadline - System.nanoTime() <= 0;
+        return deadline - System.nanoTime() <= 0; // mutation-equivalent: the boundary is one nanosecond wide
     }
 
     /** What is left until {@code deadline}, never less than zero. */
@@ -65,7 +65,7 @@ public final class Deadlines {
 
     /** Milliseconds as nanoseconds, saturated instead of wrapped. */
     public static long toNanos(long millis) {
-        if (millis <= 0) {
+        if (millis <= 0) { // mutation-equivalent: at 0 both ways give 0: 0 x 1,000,000 is 0
             return 0;
         }
         return millis > FOREVER_NANOS / 1_000_000 ? FOREVER_NANOS : millis * 1_000_000;

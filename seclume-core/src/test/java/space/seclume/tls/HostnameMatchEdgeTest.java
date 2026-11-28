@@ -130,7 +130,7 @@ class HostnameMatchEdgeTest {
      */
     @Test
     void aTrailingEmptyLabelIsNoIpv4Address() {
-        for (String name : List.of("1.2.3.", ".1.2.3", "1..2.3")) {
+        for (String name : List.of("1.2.3.", ".1.2.3", "1..2.3", "1.2.3..")) {
             assertTrue(HostnameMatch.matches(certificate(DNS, name), name),
                     name + " was taken for an address, and a name entry never matched it");
         }

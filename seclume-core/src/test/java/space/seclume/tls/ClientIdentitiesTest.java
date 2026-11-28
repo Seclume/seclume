@@ -136,6 +136,54 @@ class ClientIdentitiesTest {
         }
     }
 
+    /** closeAll() empties the cache: the same settings then build a new identity. */
+    @Test
+    void closeAllEmptiesTheCache(@TempDir Path dir) throws Exception {
+        Map<String, String> options = settings(dir);
+        ClientIdentity before = ClientIdentities.of(options);
+        ClientIdentities.closeAll();
+        org.junit.jupiter.api.Assertions.assertNotSame(before, ClientIdentities.of(options),
+                "closeAll left the identity cached");
+    }
+
+    /**
+     * A handshake with a client certificate is counted while it runs:
+     * closeAll waits for it - the server here answers nothing for 800 ms and
+     * then closes - and stops waiting when it has ended, not at its limit.
+     */
+    @Test
+    void closeAllWaitsForARealHandshakeWithAnIdentity(@TempDir Path dir) throws Exception {
+        ClientIdentity identity = ClientIdentities.of(settings(dir));
+        try (java.net.ServerSocket server = new java.net.ServerSocket(0, 1,
+                java.net.InetAddress.getLoopbackAddress())) {
+            Thread.ofVirtual().start(() -> {
+                try (java.net.Socket client = server.accept()) {
+                    client.getInputStream().read(new byte[4096]);
+                    Thread.sleep(800);
+                } catch (Exception gone) {
+                    // closed - what the client is to see
+                }
+            });
+            Thread handshake = Thread.ofVirtual().start(() -> {
+                try {
+                    ClientHandshake.connectWithoutAuthenticating(
+                            space.seclume.internal.SocketTransport.connect("127.0.0.1",
+                                    server.getLocalPort(), 5_000), "localhost", identity, null);
+                } catch (Exception expected) {
+                    // the server closed without answering
+                }
+            });
+            Thread.sleep(200);
+            long started = System.nanoTime();
+            ClientIdentities.closeAll(java.time.Duration.ofSeconds(8));
+            long waited = (System.nanoTime() - started) / 1_000_000;
+            handshake.join(10_000);
+            assertTrue(waited >= 300, "closeAll did not wait for the handshake: " + waited + " ms");
+            assertTrue(waited < 6_000, "closeAll waited for its limit, not for the handshake's end: "
+                    + waited + " ms");
+        }
+    }
+
     @Test
     void buildsAnIdentityFromTwoSettings(@TempDir Path dir) throws Exception {
         ClientIdentity identity = ClientIdentities.of(settings(dir));

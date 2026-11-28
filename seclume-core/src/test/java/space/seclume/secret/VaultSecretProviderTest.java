@@ -409,7 +409,23 @@ class VaultSecretProviderTest {
             second.join();
             assertEquals("u2", other[0]);
             assertEquals("p2", other[1]);
-            assertEquals("p1", read(provider), "the first login got the second one's password");
+            // Into a target of exactly its length: the password of its own user fits.
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment exact = arena.allocate(2);
+                assertEquals(2, provider.writeSecret(exact), "the first login's password");
+                assertEquals("p1", new String(exact.toArray(ValueLayout.JAVA_BYTE),
+                        StandardCharsets.UTF_8), "the first login got the second one's password");
+            }
+            // The pairing is for that one login: a later read is the current one's.
+            assertEquals("p2", read(provider), "a later read still got the user before's password");
+            java.lang.reflect.Field before = VaultSecretProvider.class
+                    .getDeclaredField("previousCredential");
+            before.setAccessible(true);
+            SecretScope kept = (SecretScope) before.get(provider);
+            AutoCloseable closing = provider;
+            closing.close();
+            assertThrows(IllegalStateException.class, kept::segment,
+                    "the user before's password was not wiped at close");
         }
     }
 

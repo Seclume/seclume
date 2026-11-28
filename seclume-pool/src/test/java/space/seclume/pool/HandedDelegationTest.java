@@ -56,11 +56,20 @@ class HandedDelegationTest {
 
     private static <S extends Statement> void check(Class<S> type, Wrapping<S> wrapping)
             throws Exception {
+        for (boolean yes : new boolean[] {true, false}) {
+            check(type, wrapping, yes);
+        }
+    }
+
+    /** One round: the driver answers each boolean with {@code yes}, and everything else with its own object. */
+    private static <S extends Statement> void check(Class<S> type, Wrapping<S> wrapping,
+                                                    boolean yes) throws Exception {
         List<Call> calls = new ArrayList<>();
+        Map<Method, Object> answers = new java.util.HashMap<>();
         S driver = type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type},
                 (self, method, arguments) -> {
                     calls.add(new Call(method, arguments == null ? new Object[0] : arguments));
-                    return answer(method.getReturnType());
+                    return answers.computeIfAbsent(method, m -> answer(m.getReturnType(), yes));
                 }));
         Connection handle = (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
                 new Class<?>[] {Connection.class}, (self, method, arguments) -> null);
@@ -92,8 +101,14 @@ class HandedDelegationTest {
                     + describe(call.method()));
             assertTrue(Arrays.deepEquals(arguments, call.arguments()), describe(method)
                     + " changed its arguments: " + Arrays.deepToString(call.arguments()));
-            assertEquals(answer(method.getReturnType()), answered, describe(method)
-                    + " did not return the driver's answer");
+            Object expected = answers.get(call.method());
+            if (method.getReturnType().isPrimitive()) {
+                assertEquals(expected, answered, describe(method)
+                        + " did not return the driver's answer");
+            } else {
+                assertSame(expected, answered, describe(method)
+                        + " did not return the driver's answer");
+            }
             checked++;
         }
         assertTrue(checked > 40, "only " + checked + " methods were checked");
@@ -151,16 +166,67 @@ class HandedDelegationTest {
         return null;
     }
 
-    /** What the stand-in for the driver answers: a value of each type that can be told apart. */
-    private static Object answer(Class<?> type) {
+    /**
+     * What the stand-in for the driver answers: for a boolean {@code yes}, for
+     * another primitive a value no default is, for a reference an object of
+     * its own - so that a wrapper that answered null, true or false, or zero,
+     * instead of handing the driver's answer on, is caught.
+     */
+    private static Object answer(Class<?> type, boolean yes) {
+        if (type == void.class) {
+            return null;
+        }
+        if (type == boolean.class) {
+            return yes;
+        }
+        if (type.isInterface()) {
+            return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type},
+                    (self, method, arguments) -> switch (method.getName()) {
+                        case "hashCode" -> System.identityHashCode(self);
+                        case "equals" -> self == arguments[0];
+                        case "toString" -> "answer of the driver";
+                        default -> null;
+                    });
+        }
+        if (type.isArray()) {
+            return java.lang.reflect.Array.newInstance(type.getComponentType(), 1);
+        }
+        if (type == Object.class) {
+            return new Object();
+        }
+        if (type == String.class) {
+            return new String("the driver's answer".toCharArray());
+        }
+        if (type == java.math.BigDecimal.class) {
+            return new java.math.BigDecimal("12.5");
+        }
+        if (type == java.io.Reader.class) {
+            return new java.io.StringReader("the driver's answer");
+        }
+        if (type == java.net.URL.class) {
+            try {
+                return java.net.URI.create("https://example.org/answer").toURL();
+            } catch (java.net.MalformedURLException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        if (type == java.sql.Date.class) {
+            return new java.sql.Date(86_400_000L);
+        }
+        if (type == java.sql.Time.class) {
+            return new java.sql.Time(3_600_000L);
+        }
+        if (type == java.sql.Timestamp.class) {
+            return new java.sql.Timestamp(1_000_000L);
+        }
+        if (type == java.sql.SQLWarning.class) {
+            return new java.sql.SQLWarning("the driver's answer");
+        }
         if (type == int.class) {
             return 42;
         }
         if (type == long.class) {
             return 43L;
-        }
-        if (type == boolean.class) {
-            return true;
         }
         if (type == double.class) {
             return 4.25;
@@ -174,10 +240,7 @@ class HandedDelegationTest {
         if (type == byte.class) {
             return (byte) 45;
         }
-        if (type == String.class) {
-            return "the driver's answer";
-        }
-        return null;
+        throw new IllegalArgumentException("no answer of type " + type);
     }
 
     private static String describe(Method method) {

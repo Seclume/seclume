@@ -182,7 +182,7 @@ public final class SecretWatch implements AutoCloseable {
                     return false;
                 }
                 if (!settled()) {
-                    return false;                   // still being written: the next look decides
+                    return false;                   // still being written: the next look decides // mutation-equivalent: it returns false already
                 }
                 MemorySegment.copy(candidate.segment(), 0, fingerprint.segment(), 0, 32);
             }

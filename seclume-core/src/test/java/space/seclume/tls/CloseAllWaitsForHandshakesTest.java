@@ -45,9 +45,33 @@ class CloseAllWaitsForHandshakesTest {
         ClientIdentities.handshakeStarted();
         try {
             long started = System.nanoTime();
-            ClientIdentities.closeAll(Duration.ofMillis(200));
+            java.util.List<String> warned = new java.util.concurrent.CopyOnWriteArrayList<>();
+            java.util.logging.Logger logger = java.util.logging.Logger.getLogger(
+                    ClientIdentities.class.getName());
+            java.util.logging.Handler listening = new java.util.logging.Handler() {
+                @Override
+                public void publish(java.util.logging.LogRecord record) {
+                    warned.add(record.getMessage());
+                }
+
+                @Override
+                public void flush() {
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+            logger.addHandler(listening);
+            try {
+                ClientIdentities.closeAll(Duration.ofMillis(200));
+            } finally {
+                logger.removeHandler(listening);
+            }
             long millis = (System.nanoTime() - started) / 1_000_000;
             assertTrue(millis >= 150 && millis < 5_000, "waited " + millis + " ms");
+            assertTrue(warned.stream().anyMatch(m -> m.contains("still running after 200 ms")),
+                    "the give-up was not said: " + warned);
         } finally {
             ClientIdentities.handshakeEnded();
         }

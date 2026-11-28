@@ -25,13 +25,13 @@ public final class ServerText {
         boolean clean = text.length() <= MAX;
         for (int i = 0; clean && i < text.length(); i++) {
             char c = text.charAt(i);
-            clean = !(c < 0x20 && c != '\t') && c != 0x7f && !(c >= 0x80 && c < 0xa0);
+            clean = !(c < 0x20 && c != '\t') && c != 0x7f && !(c >= 0x80 && c < 0xa0); // mutation-equivalent: a space or U+00A0 taken for unclean goes to the loop below, which leaves it as it is
         }
         if (clean) {
             return text;
         }
         StringBuilder out = new StringBuilder(Math.min(text.length(), MAX) + 16); // seclume-allow: the server's own message, made printable
-        for (int i = 0; i < text.length() && out.length() < MAX; i++) {
+        for (int i = 0; i < text.length() && out.length() < MAX; i++) { // mutation-equivalent: one escape past MAX is cut back to MAX below
             char c = text.charAt(i);
             if ((c < 0x20 && c != '\t') || c == 0x7f || (c >= 0x80 && c < 0xa0)) {
                 out.append(String.format("\\x%02x", (int) c));

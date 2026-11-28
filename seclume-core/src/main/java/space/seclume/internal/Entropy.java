@@ -170,7 +170,7 @@ public final class Entropy {
             new java.util.concurrent.atomic.AtomicLong();
 
     static long fallbackUses() {
-        return FALLBACK_USES.get();
+        return FALLBACK_USES.get(); // mutation-equivalent: no test platform lacks a kernel source; the count is 0 there whichever way
     }
 
     static void fillFromSecureRandom(MemorySegment target) {

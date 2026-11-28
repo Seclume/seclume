@@ -226,7 +226,7 @@ public final class Transports {
         if (watch == null) {
             return false;
         }
-        if (watch.task != null) {
+        if (watch.task != null) { // mutation-equivalent: a task left to run finds its watch gone and closes nothing
             watch.task.cancel(false);
         }
         return true;

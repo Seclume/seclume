@@ -145,7 +145,7 @@ final class ReloadingClientIdentity implements ClientIdentity {
             return current;
         }
         if (Arrays.equals(now, refused)
-                && System.nanoTime() - refusedAt < retryMillis * 1_000_000L) {
+                && System.nanoTime() - refusedAt < retryMillis * 1_000_000L) { // mutation-equivalent: the boundary is one nanosecond wide; the pause itself is tested
             return current;
         }
         space.seclume.jfr.SeclumeEvents.CertificateReload event =

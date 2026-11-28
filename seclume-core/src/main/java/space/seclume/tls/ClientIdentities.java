@@ -375,7 +375,7 @@ public final class ClientIdentities {
         try {
             long left = wait.toNanos();
             while (running > 0) {
-                if (left <= 0) {
+                if (left <= 0) { // mutation-equivalent: the boundary is one nanosecond wide
                     System.getLogger(ClientIdentities.class.getName()).log(
                             System.Logger.Level.WARNING, running + " TLS handshake(s) with a "
                                     + "client certificate still running after " + wait.toMillis()

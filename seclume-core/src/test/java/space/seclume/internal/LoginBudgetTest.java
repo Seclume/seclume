@@ -63,6 +63,35 @@ class LoginBudgetTest {
     }
 
     /**
+     * The default factor is 3 - three times the connect timeout, not a third
+     * of it - and the failure says the seconds and the factor.
+     */
+    @Test
+    void theDefaultBudgetIsThreeTimesTheConnectTimeout() throws Exception {
+        assertTrue(System.getProperty("seclume.loginBudgetFactor") == null, "the default is tested");
+        try (ServerSocket server = dribbling()) {
+            Transport transport = Transports.open("socket", "127.0.0.1", server.getLocalPort(), 1000);
+            long started = System.nanoTime();
+            ByteBuffer one = ByteBuffer.allocateDirect(1);
+            assertThrows(IOException.class, () -> {
+                while (true) {
+                    one.clear();
+                    if (transport.read(one) < 0) {
+                        throw new IOException("closed");
+                    }
+                }
+            });
+            long took = (System.nanoTime() - started) / 1_000_000;
+            assertTrue(took >= 2500 && took < 6000, "a budget of 3 x 1000 ms closed after "
+                    + took + " ms");
+            java.sql.SQLException said = Transports.late(new java.sql.SQLException("closed"));
+            assertTrue(said.getMessage().contains("budget of 3 s (seclume.loginBudgetFactor 3 x "
+                    + "the connect timeout of 1000 ms)"), said.getMessage());
+            transport.close();
+        }
+    }
+
+    /**
      * The factor is the setting it says: with 1, a login with a connect
      * timeout of one second has one second, not the three of the default.
      */

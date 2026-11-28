@@ -129,7 +129,7 @@ public final class Deadline implements AutoCloseable {
         if (kill != null) {
             long grace = Long.getLong("seclume.queryTimeoutGraceSeconds",
                     Math.max(2, Math.min(30, seconds)));
-            deadline.killer = Scheduler.SERVICE.schedule(() -> Thread.ofVirtual()
+            deadline.killer = Scheduler.SERVICE.schedule(() -> Thread.ofVirtual() // mutation-equivalent: the scheduled callable's result is never read
                     .name("seclume-kill").start(() -> {
                 // Under the deadline's lock, and only while it is open: once
                 // close() has returned the statement is over and its
