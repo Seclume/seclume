@@ -80,6 +80,8 @@ class NoCredentialOnTheHeapTest {
             try (SeclumeHttp header = SeclumeHttp.of("https://localhost:" + ports[3]
                     + trust + slashes(directory.resolve("api-key"))
                     + "&auth=header&header=X-Api-Key")) {
+                // Deprecated for removal since Spring 7.1 - still in applications, so still tested.
+                @SuppressWarnings("removal")
                 RestTemplate template = new RestTemplate(new SeclumeHttpRequestFactory(header));
                 template.getForObject("https://localhost:" + ports[3] + "/search?q=x",
                         String.class);

@@ -20,9 +20,9 @@
     untouched.</description>
 
   <properties>
-    <elasticsearch.version>9.5.6</elasticsearch.version>
+    <elasticsearch.version>9.5.7</elasticsearch.version>
     <opensearch.version>3.11.0</opensearch.version>
-    <aws.sdk.version>2.59.3</aws.sdk.version>
+    <aws.sdk.version>2.59.9</aws.sdk.version>
     <jackson.version>2.18.12</jackson.version>
     <jackson3.version>3.3.0</jackson3.version>
   </properties>

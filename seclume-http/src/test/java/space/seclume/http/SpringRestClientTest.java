@@ -76,6 +76,8 @@ class SpringRestClientTest {
     void restTemplateToo() throws Exception {
         try (FakeHttpsServer server = new FakeHttpsServer(pki.serverContext());
              SeclumeHttp api = api(server)) {
+            // Deprecated for removal since Spring 7.1 - still in applications, so still tested.
+            @SuppressWarnings("removal")
             RestTemplate template = new RestTemplate(new SeclumeHttpRequestFactory(api));
             assertEquals("GET /v1/items?page=2", template.getForObject(
                     "https://localhost:" + server.port() + "/v1/items?page=2", String.class));

@@ -20,7 +20,7 @@
     RestClient and RestTemplate.</description>
 
   <properties>
-    <spring.version>7.0.10</spring.version>
+    <spring.version>7.1.0</spring.version>
   </properties>
 
   <dependencies>

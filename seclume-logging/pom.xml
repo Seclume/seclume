@@ -20,7 +20,7 @@
     %redact, a java.util.logging formatter; any other logger calls SecretMasker.</description>
 
   <properties>
-    <logback.version>1.6.7</logback.version>
+    <logback.version>1.6.8</logback.version>
     <log4j.version>2.26.1</log4j.version>
   </properties>
 
