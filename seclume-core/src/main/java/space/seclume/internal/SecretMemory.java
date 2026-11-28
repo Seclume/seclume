@@ -58,6 +58,9 @@ public final class SecretMemory {
     private static final MethodHandle FTRUNCATE;
     private static final MethodHandle MMAP;
     private static final MethodHandle MUNMAP;
+    private static final MethodHandle MADVISE;
+    /** Faults every page of a range in for writing, or fails with an errno: Linux 5.14 on. */
+    private static final int MADV_POPULATE_WRITE = 23;
     private static final MethodHandle CLOSE;
     private static final VarHandle ERRNO;
     private static final long ERRNO_SIZE;
@@ -80,6 +83,7 @@ public final class SecretMemory {
         MethodHandle ftruncate = null;
         MethodHandle mmap = null;
         MethodHandle munmap = null;
+        MethodHandle madvise = null;
         MethodHandle close = null;
         VarHandle errno = null;
         long errnoSize = 0;
@@ -109,6 +113,11 @@ public final class SecretMemory {
                 munmap = linker.downcallHandle(libc.find("munmap").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                                 ValueLayout.JAVA_LONG));
+                // int madvise(void *addr, size_t length, int advice);
+                madvise = linker.downcallHandle(libc.find("madvise").orElseThrow(),
+                        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                                ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT),
+                        Linker.Option.captureCallState("errno"));
                 // int close(int fd);
                 close = linker.downcallHandle(libc.find("close").orElseThrow(),
                         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
@@ -121,6 +130,7 @@ public final class SecretMemory {
         FTRUNCATE = ftruncate;
         MMAP = mmap;
         MUNMAP = munmap;
+        MADVISE = madvise;
         CLOSE = close;
         ERRNO = errno;
         ERRNO_SIZE = errnoSize;
@@ -257,7 +267,10 @@ public final class SecretMemory {
                         if (chunk < 0) {
                             return refusedOrNull(-chunk);
                         }
+                        // A new chunk is one block of the largest class: split
+                        // down to the one asked for (found in CI - a null block).
                         addChunk(chunk);
+                        split(index);
                     }
                     block = FREE.get(index).poll();
                 }
@@ -277,10 +290,15 @@ public final class SecretMemory {
         if (MODE == Mode.REQUIRED) {
             throw new IllegalStateException("seclume.secretmem=required, and " + reason(errno));
         }
-        LOG.log(Level.WARNING, "seclume: this secret goes into locked pages, not into secret "
-                + "pages, because " + reason(errno));
+        if (!warnedFull) {
+            warnedFull = true;
+            LOG.log(Level.WARNING, "seclume: secrets go into locked pages, not into secret pages, "
+                    + "while " + reason(errno) + " - said once");
+        }
         return null;
     }
+
+    private static volatile boolean warnedFull;
 
     private static int sizeClass(long capacity) {
         long size = SMALLEST;
@@ -377,8 +395,33 @@ public final class SecretMemory {
         }
     }
 
+    /**
+     * Tests only: pages from somewhere else - ordinary memory - so that the
+     * pool's handing out and taking back is tested where the kernel has no
+     * secret pages. {@link #useForTests} sets it.
+     */
+    private static volatile java.util.function.LongUnaryOperator mapForTests;
+
+    /** Tests only: an empty pool, its pages from {@code mapper}; null for the kernel's again. */
+    static void useForTests(java.util.function.LongUnaryOperator mapper) {
+        synchronized (LOCK) {
+            for (ArrayDeque<Long> free : FREE) {
+                free.clear();
+            }
+            CHUNKS.clear();
+            LARGE.clear();
+            mapForTests = mapper;
+            decided = mapper != null;
+            unavailable = null;
+        }
+    }
+
     /** Maps {@code length} bytes of secret pages: the address, or minus errno. */
     private static long map(long length) {
+        java.util.function.LongUnaryOperator test = mapForTests;
+        if (test != null) {
+            return test.applyAsLong(length);
+        }
         try (Arena call = Arena.ofConfined()) {
             MemorySegment state = call.allocate(ERRNO_SIZE);
             long fd = (long) SYSCALL.invokeExact(state, SYS_MEMFD_SECRET, 0);
@@ -393,6 +436,15 @@ public final class SecretMemory {
                         length, PROT_READ_WRITE, MAP_SHARED, (int) fd, 0L);
                 if (mapped.address() == -1L) {
                     return -errno(state);
+                }
+                // Secret pages are charged to the memlock limit when first
+                // touched, not when mapped: past the limit that first write
+                // was a SIGBUS - a JVM InternalError. Faulted in here, the
+                // limit is an errno, and the secret goes to locked pages instead.
+                if ((int) MADVISE.invokeExact(state, mapped, length, MADV_POPULATE_WRITE) != 0) {
+                    long errno = errno(state);
+                    unmap(mapped.address(), length);
+                    return -(errno == 14 ? 12 : errno);   // EFAULT: a page could not be had - no room
                 }
                 return mapped.address();
             } finally {
@@ -409,6 +461,9 @@ public final class SecretMemory {
     }
 
     private static void unmap(long base, long length) {
+        if (mapForTests != null) {
+            return;                                   // ordinary memory, the test's to keep
+        }
         try {
             int ignored = (int) MUNMAP.invokeExact(MemorySegment.ofAddress(base), length);
         } catch (Throwable t) {

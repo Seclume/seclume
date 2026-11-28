@@ -148,6 +148,63 @@ class SecretMemoryTest {
         }
     }
 
+    /**
+     * The pool itself, on ordinary pages where the kernel has no secret ones:
+     * blocks of every size a secret has never overlap, keep what is written
+     * to them, come back wiped, the pool grows chunk by chunk and splits a
+     * new chunk down to the size asked for (a null block in CI before), takes
+     * a secret larger than a chunk, and gives idle chunks back.
+     */
+    @Test
+    void thePoolHandsOutBlocksThatNeverOverlap() {
+        Assumptions.assumeFalse(SecretMemory.inUse(), "the kernel's pages are tested above");
+        SecretMemory.useForTests(length -> Arena.global().allocate(length, 4096).address());
+        try {
+            List<Arena> arenas = new ArrayList<>();
+            List<MemorySegment> blocks = new ArrayList<>();
+            int[] sizes = {1, 15, 16, 17, 31, 32, 100, 255, 256, 1000, 4096, 5000, 30_000,
+                (int) SecretMemory.CHUNK, (int) SecretMemory.CHUNK + 1, 3};
+            for (int round = 0; round < 3; round++) {
+                for (int size : sizes) {
+                    Arena arena = Arena.ofConfined();
+                    arenas.add(arena);
+                    MemorySegment block = SecretMemory.allocate(size, arena);
+                    assertNotNull(block, "size " + size);
+                    assertEquals(size, block.byteSize());
+                    assertArrayEquals(new byte[size], block.toArray(ValueLayout.JAVA_BYTE),
+                            "a block came out not wiped");
+                    block.fill((byte) (blocks.size() + 1));
+                    blocks.add(block);
+                }
+            }
+            for (int i = 0; i < blocks.size(); i++) {
+                MemorySegment block = blocks.get(i);
+                for (int j = i + 1; j < blocks.size(); j++) {
+                    MemorySegment other = blocks.get(j);
+                    assertTrue(block.address() + block.byteSize() <= other.address()
+                            || other.address() + other.byteSize() <= block.address(),
+                            "two blocks overlap");
+                }
+                byte expected = (byte) (i + 1);
+                for (long at = 0; at < block.byteSize(); at++) {
+                    assertEquals(expected, block.get(ValueLayout.JAVA_BYTE, at), "block " + i);
+                }
+            }
+            assertEquals(blocks.size(), SecretMemory.lent());
+            assertTrue(SecretMemory.chunks() >= 2);
+            arenas.forEach(Arena::close);
+            assertEquals(0, SecretMemory.lent(), "a block was not taken back");
+            assertTrue(SecretMemory.releaseIdle() >= 2);
+            assertEquals(0, SecretMemory.chunks());
+            // And again after the release: a fresh chunk, split down once more.
+            try (Arena arena = Arena.ofConfined()) {
+                assertNotNull(SecretMemory.allocate(24, arena));
+            }
+        } finally {
+            SecretMemory.useForTests(null);
+        }
+    }
+
     /** A secret scope uses them where they are, and works the same where they are not. */
     @Test
     void aSecretScopeWorksEitherWay() {
